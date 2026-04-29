@@ -61,9 +61,27 @@ COLOR_LABEL_NAMES = {
 
 @contextmanager
 def open_catalog(catalog_path: str | Path) -> Iterator[sqlite3.Connection]:
-    """Open a catalog read-only. Falls back to a tempfile copy if needed.
+    """Open a catalog read-only.
 
-    Use this as a context manager::
+    Lightroom keeps its catalog in **WAL mode** while it's running, which means
+    recent changes live in a sibling ``.lrcat-wal`` file and aren't yet
+    checkpointed back into the main ``.lrcat``. If we open the main file with
+    SQLite's ``immutable=1`` URI we silently miss everything in the WAL — for
+    example, the entire default smart-collection set on a fresh LR install, or
+    any photos imported during the current LR session.
+
+    Strategy:
+
+    1. If a non-empty ``.lrcat-wal`` exists alongside the catalog, **LR is
+       likely running**. Copy the trio (``.lrcat`` + ``.lrcat-wal`` +
+       ``.lrcat-shm``) to a tempdir and open the copy with regular ``mode=ro``
+       so SQLite applies the WAL.
+    2. Otherwise (no WAL, or empty WAL) open the main file with
+       ``immutable=1`` for a fast zero-copy read.
+    3. If immutable open fails for any reason, fall back to copying just the
+       main file.
+
+    Use as a context manager::
 
         with open_catalog(path) as conn:
             cur = conn.execute("SELECT count(*) FROM Adobe_images")
@@ -72,11 +90,31 @@ def open_catalog(catalog_path: str | Path) -> Iterator[sqlite3.Connection]:
     if not path.exists():
         raise FileNotFoundError(f"catalog not found: {path}")
 
+    wal = path.with_name(path.name + "-wal")
+    has_wal = wal.exists() and wal.stat().st_size > 0
+
+    if has_wal:
+        logger.debug("WAL detected (%d bytes); copying trio for read", wal.stat().st_size)
+        with tempfile.TemporaryDirectory(prefix="lr-py-") as td:
+            td_p = Path(td)
+            for suffix in ("", "-wal", "-shm"):
+                src = path.with_name(path.name + suffix)
+                if src.exists():
+                    shutil.copy2(src, td_p / src.name)
+            copy = td_p / path.name
+            conn = sqlite3.connect(f"file:{copy}?mode=ro", uri=True)
+            try:
+                conn.row_factory = sqlite3.Row
+                yield conn
+            finally:
+                conn.close()
+            return
+
     uri = f"file:{path}?mode=ro&immutable=1"
     try:
         conn = sqlite3.connect(uri, uri=True)
     except sqlite3.OperationalError as exc:
-        logger.debug("immutable open failed (%s); falling back to copy", exc)
+        logger.debug("immutable open failed (%s); falling back to plain copy", exc)
         with tempfile.TemporaryDirectory(prefix="lr-py-") as td:
             copy = Path(td) / path.name
             shutil.copy2(path, copy)

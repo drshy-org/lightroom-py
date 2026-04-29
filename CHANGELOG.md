@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-04-28
+
+First-real-Lightroom validation pass against Lightroom Classic 15.3.
+
+### Verified end-to-end
+- Bridge protocol: real Lua plugin (in LR 15.3) handshakes, polls `/poll`, dispatches `ping`, POSTs to `/respond`. `lr_version` returned: `15.3`.
+- Plugin install via `lightroom bridge install` works cleanly on macOS into `~/Library/Application Support/Adobe/Lightroom/Modules/`.
+- Token-based auth + persisted `bridge.json` round-trip works.
+- `LightroomClient.connect()` auto-discovery of host/port/token from persisted state confirmed live.
+
+### Fixed
+- **WAL-aware catalog open** (`_sqlite.open_catalog`). Lightroom keeps the catalog in WAL mode while running, so recent writes live in `.lrcat-wal` and aren't yet checkpointed into the main `.lrcat`. Our previous `immutable=1` URI silently ignored the WAL — for example, on a fresh LR 15.3 install we counted `collections: 0` even though 8 default smart-collection rows were sitting in a 502 KB `.lrcat-wal`. Now: if a non-empty `.lrcat-wal` exists, copy the trio (`.lrcat` + `-wal` + `-shm`) to a tempdir and open the copy with regular `mode=ro` so SQLite applies the WAL. If no WAL or empty WAL, keep the fast `immutable=1` path. Includes a regression test (`test_wal_aware_open`) that reproduces the real-LR bug against the synthetic catalog fixture.
+
 ## [0.1.0] — 2026-04-28
 
 First shipped release. Covers Phase 0 (scaffold) → Phase 3 (metadata writes).

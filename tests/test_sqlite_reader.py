@@ -94,3 +94,56 @@ def test_count_matches_list(synthetic_lrcat: Path) -> None:
 def test_missing_catalog_raises(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         get_catalog_summary(tmp_path / "no-such.lrcat")
+
+
+def test_wal_aware_open(synthetic_lrcat: Path) -> None:
+    """When a non-empty ``.lrcat-wal`` exists, ``open_catalog`` must read the
+    trio so it sees uncheckpointed changes — not silently miss them via
+    ``immutable=1``.
+
+    Reproduces the real bug we hit against Lightroom 15.3: 8 default smart
+    collections were sitting in the WAL and our stats query returned 0.
+
+    Lightroom keeps the catalog connection open while running, so the WAL
+    persists on disk. Python's ``sqlite3`` runs a passive checkpoint on
+    ``close()`` regardless of ``wal_autocheckpoint=0``, so we must hold the
+    writer connection alive for the duration of the assertion.
+    """
+    import sqlite3
+
+    # Switch to WAL mode (one-time setup).
+    setup = sqlite3.connect(synthetic_lrcat)
+    setup.execute("PRAGMA journal_mode=WAL")
+    setup.commit()
+    setup.close()
+
+    # Open + write + leave open — mirrors Lightroom holding the catalog.
+    writer = sqlite3.connect(synthetic_lrcat)
+    writer.execute("PRAGMA wal_autocheckpoint=0")
+    writer.execute(
+        "INSERT INTO AgLibraryCollection VALUES (?, ?, ?)",
+        (99, None, "Late-arrival collection"),
+    )
+    writer.commit()
+    try:
+        wal = synthetic_lrcat.with_name(synthetic_lrcat.name + "-wal")
+        assert wal.exists() and wal.stat().st_size > 0, (
+            f"test setup: WAL should hold the row (size={wal.stat().st_size if wal.exists() else 'N/A'})"
+        )
+
+        # Sanity-check the bug: with the WAL persisted, ``immutable=1`` against
+        # the main file alone misses the row. Our open_catalog must NOT do that.
+        immutable = sqlite3.connect(f"file:{synthetic_lrcat}?mode=ro&immutable=1", uri=True)
+        bare_count = immutable.execute("SELECT COUNT(*) FROM AgLibraryCollection").fetchone()[0]
+        immutable.close()
+        assert bare_count < 4, "test scaffolding: WAL row leaked into main file"
+
+        # Now the real assertion — get_catalog_stats goes through open_catalog,
+        # which must see the WAL row.
+        s = get_catalog_stats(synthetic_lrcat)
+        # Baseline: 2 collections (Picks/Rejects), 1 smart. + WAL row 'Late-arrival'
+        # has creationId=NULL so it counts as regular => 3 collections, 1 smart.
+        assert s.collections == 3, f"expected 3 (incl. WAL row), got {s.collections}"
+        assert s.smart_collections == 1
+    finally:
+        writer.close()
