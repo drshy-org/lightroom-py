@@ -62,6 +62,12 @@ class MetadataAPI:
         *,
         photo_uuids: Iterable[str] | None = None,
     ) -> dict:
+        """Set the rating (1..5) or clear it (0).
+
+        Mirrors LR's keyboard-shortcut behaviour: 0 clears the rating
+        (the underlying ``setRawMetadata`` call rejects 0 as a literal
+        value, so the bridge plugin maps 0 → nil before calling LR).
+        """
         if not 0 <= rating <= 5:
             raise ValueError(f"rating must be 0..5, got {rating}")
         return await self._core.call(

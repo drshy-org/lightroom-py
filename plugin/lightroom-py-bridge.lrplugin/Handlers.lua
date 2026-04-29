@@ -151,14 +151,24 @@ Handlers["metadata.set_rating"] = function(params)
   local cat = LrApplication.activeCatalog()
   local photos, missing = target_photos(cat, params)
   local rating = params and params.rating
-  if type(rating) ~= "number" or rating < 0 or rating > 5 then
-    error("metadata.set_rating: 'rating' must be an integer 0..5")
+  if rating ~= nil and (type(rating) ~= "number" or rating < 0 or rating > 5) then
+    error("metadata.set_rating: 'rating' must be nil or an integer 0..5")
+  end
+
+  -- LR rejects setRawMetadata("rating", 0) with "Invalid rating: 0" — to
+  -- clear the rating you must pass nil. We treat 0 as "clear" so callers can
+  -- use 0..5 + 0-means-unrated, matching LR's keyboard shortcut behaviour.
+  local lr_value
+  if rating == nil or rating == 0 then
+    lr_value = nil
+  else
+    lr_value = rating
   end
 
   local touched = 0
   cat:withWriteAccessDo("lightroom-py: set rating", function()
     for _, photo in ipairs(photos) do
-      photo:setRawMetadata("rating", rating)
+      photo:setRawMetadata("rating", lr_value)
       touched = touched + 1
     end
   end, { timeout = 30, asynchronous = false })

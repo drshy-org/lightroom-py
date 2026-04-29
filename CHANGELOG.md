@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-04-28
+
+End-to-end metadata writes verified against Lightroom Classic 15.3. Caught two real bugs that the mock-plugin tests couldn't see.
+
+### Fixed
+- **Lua dispatcher: `pcall` → `LrTasks.pcall`**. Lua 5.1's built-in `pcall` is C-implemented and forbids yielding inside it, but every metadata handler internally yields (waiting for the catalog write lock via `withWriteAccessDo`). Result: every metadata call failed with `"Yielding is not allowed within a C or metamethod call"` while ping kept working (because ping doesn't yield). Switched to `LrTasks.pcall`, which is LR's yield-aware protected call — same return shape, but the wrapped function may yield freely. This is the canonical idiom in Adobe's own SDK examples. `PLUGIN_VERSION` bumped to `0.1.2`.
+- **`metadata.set_rating` rejecting `0`**. LR's `setRawMetadata("rating", 0)` raises `"Invalid rating: 0"` — to clear a rating you have to pass `nil`. Our handler was passing `0` literally. Now: handler maps `0 → nil` so callers can use `0..5` with `0 = clear`, mirroring LR's keyboard shortcut behaviour. `PLUGIN_VERSION` bumped to `0.1.3`.
+
+### Verified end-to-end against real Lightroom 15.3
+- `lightroom catalog stats / info` against a real 95-photo catalog — counts, capture-time bounds correct.
+- `lightroom photos list` with `--rating`, `--camera`, `--lens`, `--keyword`, `--since` filters all work against the real `.lrcat` schema.
+- `lightroom metadata add-keywords / remove-keywords / rate / color / set-iptc` — full write round-trip on a real photo, then full cleanup back to original state, verified via SQLite read-back.
+
 ## [0.1.1] — 2026-04-28
 
 First-real-Lightroom validation pass against Lightroom Classic 15.3.

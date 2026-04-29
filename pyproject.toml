@@ -1,6 +1,6 @@
 [project]
 name = "lightroom-py"
-version = "0.1.1"
+version = "0.1.2"
 description = "Unofficial Python library, CLI, and agent skill for automating Adobe Lightroom Classic"
 dynamic = ["readme"]
 requires-python = ">=3.10"

@@ -25,7 +25,7 @@ local Handlers = require "Handlers"
 local logger = LrLogger("lightroom-py")
 logger:enable("logfile")
 
-local PLUGIN_VERSION = "0.1.0"
+local PLUGIN_VERSION = "0.1.3"
 
 local M = {}
 
@@ -91,12 +91,20 @@ local function do_handshake()
   return parsed.session_id, nil
 end
 
+-- Lua 5.1's `pcall` is implemented in C and is NOT yieldable — calling any
+-- yielding LR API (e.g. cat:withWriteAccessDo waiting for a write lock) inside
+-- regular pcall raises "Yielding is not allowed within a C or metamethod call".
+--
+-- LrTasks.pcall is LR's yield-aware pcall: same return shape as Lua's pcall
+-- (success, result_or_err) but the wrapped function may yield. This is the
+-- canonical idiom in Adobe's own SDK examples.
 local function dispatch(method, params)
   local handler = Handlers[method]
   if not handler then
     return false, nil, "unknown_method", "no handler for: " .. tostring(method)
   end
-  local ok, result_or_err = pcall(handler, params)
+
+  local ok, result_or_err = LrTasks.pcall(handler, params)
   if not ok then
     return false, nil, "handler_error", tostring(result_or_err)
   end
