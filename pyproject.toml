@@ -1,0 +1,127 @@
+[project]
+name = "lightroom-py"
+version = "0.1.0"
+description = "Unofficial Python library, CLI, and agent skill for automating Adobe Lightroom Classic"
+dynamic = ["readme"]
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Henry Shen", email = "hongyushen21@gmail.com"}
+]
+keywords = ["lightroom", "adobe", "photography", "automation", "claude", "mcp", "client", "api"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Graphics",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "httpx>=0.27.0",
+    "aiohttp>=3.9.0",
+    "click>=8.0.0",
+    "rich>=13.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/henryshen/lightroom-py"
+Repository = "https://github.com/henryshen/lightroom-py"
+Issues = "https://github.com/henryshen/lightroom-py/issues"
+
+[project.optional-dependencies]
+exiftool = ["pyexiftool>=0.5.0"]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-aiohttp>=1.0.0",
+    "pytest-cov>=4.0.0",
+    "pytest-timeout>=2.3.0",
+    "python-dotenv>=1.0.0",
+    "mypy>=1.0.0",
+    "pre-commit>=4.0.0",
+    "ruff>=0.8.0",
+]
+all = ["lightroom-py[exiftool,dev]"]
+
+[project.scripts]
+lightroom = "lightroom.lightroom_cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+# Skip readme rendering until we have a README.md; PLAN.md is the working doc for now.
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lightroom"]
+force-include = {"plugin/lightroom-py-bridge.lrplugin" = "lightroom/data/lightroom-py-bridge.lrplugin"}
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+timeout = 60
+markers = [
+    "integration: tests requiring a live Lightroom Classic with the bridge plugin installed",
+    "slow: tests that take longer than a few seconds",
+]
+
+[tool.coverage.run]
+source = ["src/lightroom"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = false
+warn_unused_ignores = true
+disallow_untyped_defs = false
+check_untyped_defs = true
+ignore_missing_imports = true
+files = ["src/lightroom"]
+exclude = ["tests/"]
+
+[[tool.mypy.overrides]]
+module = "lightroom.cli.*"
+warn_return_any = false
+strict_optional = true
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+    "SIM", # flake8-simplify
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+    "B008",   # function call in default argument (Click uses this)
+    "SIM102", # nested ifs - readability for parsing
+    "SIM105", # contextlib.suppress - explicit try/except clearer
+]
+per-file-ignores = {"src/lightroom/__init__.py" = ["E402"], "src/lightroom/lightroom_cli.py" = ["E402"]}
+
+[tool.ruff.lint.isort]
+known-first-party = ["lightroom"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
