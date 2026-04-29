@@ -269,4 +269,353 @@ Handlers["metadata.read_xmp"] = function(params)
   return { touched = touched, missing = missing }
 end
 
+-- ---------- develop module (Phase 4) ----------
+
+Handlers["develop.list_presets"] = function(_params)
+  -- Walk LR's develop preset folders and return a flat list of {folder, name}.
+  local folders = LrApplication.developPresetFolders() or {}
+  local out = {}
+  for _, folder in ipairs(folders) do
+    local fname = folder:getName()
+    local presets = folder:getDevelopPresets() or {}
+    for _, p in ipairs(presets) do
+      table.insert(out, { folder = fname, name = p:getName(), uuid = p:getUuid() })
+    end
+  end
+  return { presets = out, count = #out }
+end
+
+Handlers["develop.apply_preset"] = function(params)
+  local cat = LrApplication.activeCatalog()
+  local photos, missing = target_photos(cat, params)
+  local preset_name = params and params.preset
+  local preset_folder = params and params.folder  -- optional disambiguation
+  if type(preset_name) ~= "string" or preset_name == "" then
+    error("develop.apply_preset: 'preset' must be a non-empty string")
+  end
+
+  -- Find the preset by name (and optionally folder).
+  local target_preset
+  for _, folder in ipairs(LrApplication.developPresetFolders() or {}) do
+    if (preset_folder == nil) or folder:getName() == preset_folder then
+      for _, p in ipairs(folder:getDevelopPresets() or {}) do
+        if p:getName() == preset_name then
+          target_preset = p
+          break
+        end
+      end
+    end
+    if target_preset then break end
+  end
+
+  if not target_preset then
+    error("develop.apply_preset: preset not found: " ..
+          tostring(preset_folder or "*") .. "/" .. preset_name)
+  end
+
+  local touched = 0
+  cat:withWriteAccessDo("lightroom-py: apply preset", function()
+    for _, photo in ipairs(photos) do
+      photo:applyDevelopPreset(target_preset)
+      touched = touched + 1
+    end
+  end, { timeout = 60, asynchronous = false })
+
+  return { touched = touched, missing = missing, preset = preset_name }
+end
+
+Handlers["develop.apply_settings"] = function(params)
+  local cat = LrApplication.activeCatalog()
+  local photos, missing = target_photos(cat, params)
+  local settings = params and params.settings
+  if type(settings) ~= "table" or next(settings) == nil then
+    error("develop.apply_settings: 'settings' must be a non-empty object")
+  end
+
+  local touched = 0
+  cat:withWriteAccessDo("lightroom-py: apply develop settings", function()
+    for _, photo in ipairs(photos) do
+      photo:applyDevelopSettings(settings)
+      touched = touched + 1
+    end
+  end, { timeout = 60, asynchronous = false })
+
+  return { touched = touched, missing = missing }
+end
+
+Handlers["develop.get_settings"] = function(params)
+  local cat = LrApplication.activeCatalog()
+  local photos, missing = target_photos(cat, params)
+  if #photos == 0 then
+    error("develop.get_settings: no target photo (pass uuid or set selection)")
+  end
+
+  local out = {}
+  cat:withReadAccessDo("lightroom-py: get develop settings", function()
+    for _, photo in ipairs(photos) do
+      local uid = photo:getRawMetadata("uuid")
+      out[uid] = photo:getDevelopSettings()
+    end
+  end, { timeout = 30 })
+
+  return { settings = out, missing = missing }
+end
+
+Handlers["develop.copy"] = function(params)
+  local cat = LrApplication.activeCatalog()
+  local src_uuid = params and params.src
+  local dst_uuids = (params and params.dsts) or {}
+  if type(src_uuid) ~= "string" or src_uuid == "" then
+    error("develop.copy: 'src' must be a photo uuid")
+  end
+  if type(dst_uuids) ~= "table" or #dst_uuids == 0 then
+    error("develop.copy: 'dsts' must be a non-empty list of photo uuids")
+  end
+
+  -- Resolve src + dsts in one walk.
+  local want = { [src_uuid] = "src" }
+  for _, u in ipairs(dst_uuids) do want[u] = "dst" end
+
+  local src_photo
+  local dsts = {}
+  local missing_dst = {}
+  for _, photo in ipairs(cat:getAllPhotos()) do
+    local uid = photo:getRawMetadata("uuid")
+    local kind = want[uid]
+    if kind == "src" then src_photo = photo
+    elseif kind == "dst" then table.insert(dsts, photo); want[uid] = nil end
+    if kind then want[uid] = nil end
+  end
+  for u, _ in pairs(want) do
+    if u ~= src_uuid then table.insert(missing_dst, u) end
+  end
+
+  if not src_photo then
+    error("develop.copy: src photo not found: " .. src_uuid)
+  end
+
+  local settings
+  cat:withReadAccessDo("lightroom-py: read src settings", function()
+    settings = src_photo:getDevelopSettings()
+  end, { timeout = 10 })
+
+  local touched = 0
+  cat:withWriteAccessDo("lightroom-py: copy develop settings", function()
+    for _, dst in ipairs(dsts) do
+      dst:applyDevelopSettings(settings)
+      touched = touched + 1
+    end
+  end, { timeout = 60, asynchronous = false })
+
+  return { copied_to = touched, missing = missing_dst }
+end
+
+Handlers["develop.reset"] = function(params)
+  local cat = LrApplication.activeCatalog()
+  local photos, missing = target_photos(cat, params)
+
+  local touched = 0
+  cat:withWriteAccessDo("lightroom-py: reset develop", function()
+    for _, photo in ipairs(photos) do
+      photo:resetDevelopSettings()
+      touched = touched + 1
+    end
+  end, { timeout = 60, asynchronous = false })
+
+  return { touched = touched, missing = missing }
+end
+
+Handlers["develop.set"] = function(params)
+  -- Live slider control via LrDevelopController. Only works when the user
+  -- is in the Develop module on the target photo.
+  local LrDevelopController = import "LrDevelopController"
+  local LrApplicationView   = import "LrApplicationView"
+
+  local values = params and params.values
+  if type(values) ~= "table" or next(values) == nil then
+    error("develop.set: 'values' must be a non-empty {slider=number} object")
+  end
+
+  -- Switch to Develop module so LrDevelopController can drive sliders.
+  pcall(function() LrApplicationView.switchToModule("develop") end)
+
+  local applied = {}
+  for slider, value in pairs(values) do
+    local ok, err = pcall(function()
+      LrDevelopController.setValue(slider, value)
+    end)
+    if ok then
+      applied[slider] = value
+    else
+      applied[slider] = { error = tostring(err) }
+    end
+  end
+  return { applied = applied }
+end
+
+-- ---------- AI staging (Phase 5) ----------
+
+-- The LR SDK lets us write AI-feature parameters into a photo's develop
+-- settings table, but cannot trigger the actual AI compute step. After
+-- staging, the user must click "Update AI Settings" in Lightroom.
+
+Handlers["ai.stage_denoise"] = function(params)
+  local cat = LrApplication.activeCatalog()
+  local photos, missing = target_photos(cat, params)
+  local strength = (params and params.strength) or 50
+  if type(strength) ~= "number" or strength < 0 or strength > 100 then
+    error("ai.stage_denoise: 'strength' must be 0..100")
+  end
+
+  -- AI Denoise sets EnableAIDenoise=true + AIDenoiseAmount=N in settings.
+  local settings = {
+    EnableAIDenoise = true,
+    AIDenoiseAmount = strength,
+  }
+
+  local touched = 0
+  cat:withWriteAccessDo("lightroom-py: stage AI denoise", function()
+    for _, photo in ipairs(photos) do
+      photo:applyDevelopSettings(settings)
+      touched = touched + 1
+    end
+  end, { timeout = 30, asynchronous = false })
+
+  return {
+    touched = touched,
+    missing = missing,
+    note = "Settings staged. Click 'Update AI Settings' in Lightroom to actually denoise.",
+  }
+end
+
+Handlers["ai.prompt_update"] = function(_params)
+  local LrDialogs = import "LrDialogs"
+  -- LrDialogs.message blocks the LrTasks; that's fine — we want the user
+  -- to acknowledge before we return.
+  LrDialogs.message(
+    "lightroom-py: AI compute pending",
+    "AI develop settings have been staged on the target photos.\n\n" ..
+    "To run the AI step, select the affected photos in the Develop module " ..
+    "and click 'Update AI Settings' (the small ✨ icon, or use the menu).",
+    "info"
+  )
+  return { acknowledged = true }
+end
+
+-- ---------- Edit-In escape hatch (Phase 5) ----------
+
+-- Pattern (Topaz-style): export selected photos as TIFF/JPEG to a temp
+-- directory, hand the paths back to Python (which runs the external tool),
+-- then we reimport the results as stacked siblings of the originals.
+--
+-- Split: Lua does the export + import (catalog APIs); Python does the
+-- external command + file shuffle. This keeps the Lua surface tiny.
+
+Handlers["edit_in.export"] = function(params)
+  local LrExportSession = import "LrExportSession"
+  local LrPathUtils     = import "LrPathUtils"
+  local LrFileUtils     = import "LrFileUtils"
+
+  local cat = LrApplication.activeCatalog()
+  local photos, missing = target_photos(cat, params)
+  if #photos == 0 then
+    error("edit_in.export: no target photos")
+  end
+
+  local out_dir = params and params.out_dir
+  if type(out_dir) ~= "string" or out_dir == "" then
+    error("edit_in.export: 'out_dir' must be a non-empty string")
+  end
+  local format = (params and params.format) or "TIFF"  -- "TIFF", "JPEG", "PSD", "DNG", "ORIGINAL"
+  local quality = (params and params.quality) or 95     -- only used for JPEG
+  local color_space = (params and params.color_space) or "AdobeRGB"
+
+  if not LrFileUtils.exists(out_dir) then
+    LrFileUtils.createAllDirectories(out_dir)
+  end
+
+  local export_settings = {
+    LR_format            = format,
+    LR_export_destinationType    = "specificFolder",
+    LR_export_destinationPathPrefix = out_dir,
+    LR_export_useSubfolder      = false,
+    LR_jpeg_quality      = quality / 100.0,  -- LR wants 0..1
+    LR_export_colorSpace = color_space,
+    LR_size_doConstrain  = false,
+    LR_collisionHandling = "rename",
+  }
+
+  local session = LrExportSession({
+    photosToExport = photos,
+    exportSettings = export_settings,
+  })
+
+  local exported = {}
+  for _, rendition in session:renditions() do
+    local ok, path_or_err = rendition:waitForRender()
+    if ok then
+      table.insert(exported, {
+        uuid = rendition.photo:getRawMetadata("uuid"),
+        path = path_or_err,
+      })
+    else
+      table.insert(exported, {
+        uuid = rendition.photo:getRawMetadata("uuid"),
+        error = tostring(path_or_err),
+      })
+    end
+  end
+
+  return { exported = exported, missing = missing, out_dir = out_dir }
+end
+
+Handlers["edit_in.import_as_stack"] = function(params)
+  -- After Python has run an external tool on the exported files and dropped
+  -- result paths next to (or on top of) the originals, this re-imports them
+  -- into the catalog and stacks each result with the source photo.
+  local cat = LrApplication.activeCatalog()
+  local pairs_ = (params and params.pairs) or {}
+  if type(pairs_) ~= "table" or #pairs_ == 0 then
+    error("edit_in.import_as_stack: 'pairs' must be a non-empty list of {src_uuid, result_path}")
+  end
+
+  -- Build src lookup.
+  local want = {}
+  for _, p in ipairs(pairs_) do want[p.src_uuid] = true end
+  local src_by_uuid = {}
+  for _, photo in ipairs(cat:getAllPhotos()) do
+    local uid = photo:getRawMetadata("uuid")
+    if want[uid] then src_by_uuid[uid] = photo end
+  end
+
+  local imported = {}
+  local errors = {}
+  cat:withWriteAccessDo("lightroom-py: import edit-in result", function()
+    for _, p in ipairs(pairs_) do
+      local src = src_by_uuid[p.src_uuid]
+      if not src then
+        table.insert(errors, { src_uuid = p.src_uuid, error = "src not found" })
+      else
+        local ok, new_photo_or_err = pcall(function()
+          return cat:addPhoto(p.result_path, src, "above")
+        end)
+        if ok then
+          table.insert(imported, {
+            src_uuid = p.src_uuid,
+            new_uuid = new_photo_or_err and new_photo_or_err:getRawMetadata("uuid"),
+          })
+        else
+          table.insert(errors, {
+            src_uuid = p.src_uuid,
+            result_path = p.result_path,
+            error = tostring(new_photo_or_err),
+          })
+        end
+      end
+    end
+  end, { timeout = 120, asynchronous = false })
+
+  return { imported = imported, errors = errors }
+end
+
 return Handlers

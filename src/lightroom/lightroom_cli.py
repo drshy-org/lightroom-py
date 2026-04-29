@@ -8,7 +8,7 @@ import click
 
 from . import __version__
 from ._logging import configure as _configure_logging
-from .cli import bridge, catalog, doctor, metadata, photos, skill
+from .cli import ai, bridge, catalog, develop, doctor, edit_in, metadata, photos, skill
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,9 @@ cli.add_command(bridge.bridge)
 cli.add_command(catalog.catalog)
 cli.add_command(photos.photos)
 cli.add_command(metadata.metadata)
+cli.add_command(develop.develop)
+cli.add_command(ai.ai)
+cli.add_command(edit_in.edit_in)
 cli.add_command(skill.skill)
 
 

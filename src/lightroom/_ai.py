@@ -11,6 +11,7 @@ This sub-client exposes that limitation honestly: ``stage_*`` writes settings,
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 
 from ._core import ClientCore
 
@@ -22,20 +23,27 @@ class AIAPI:
         self._core = core
 
     async def stage_denoise(
-        self, *, strength: int = 50, photo_uuids: list[str] | None = None
-    ) -> None:
-        """Stage AI Denoise settings. User must run Update AI to actually denoise."""
-        del strength, photo_uuids
-        raise NotImplementedError
+        self,
+        *,
+        strength: int = 50,
+        photo_uuids: Iterable[str] | None = None,
+    ) -> dict:
+        """Stage AI Denoise settings on the target photos.
 
-    async def stage_select_subject(self, *, photo_uuids: list[str] | None = None) -> None:
-        del photo_uuids
-        raise NotImplementedError
+        ``strength`` is 0..100, mapping to LR's AI Denoise amount slider.
+        After staging, the user must run **Update AI Settings** in Lightroom
+        for the actual denoise model to compute.
+        """
+        if not 0 <= strength <= 100:
+            raise ValueError(f"strength must be 0..100, got {strength}")
+        return await self._core.call(
+            "ai.stage_denoise",
+            {"strength": strength, "uuids": list(photo_uuids or [])},
+        )
 
-    async def stage_select_sky(self, *, photo_uuids: list[str] | None = None) -> None:
-        del photo_uuids
-        raise NotImplementedError
+    async def prompt_update(self) -> dict:
+        """Show a dialog in LR telling the user to click Update AI Settings.
 
-    async def prompt_update(self) -> None:
-        """Show a dialog in LR telling the user to click Update AI Settings."""
-        raise NotImplementedError
+        Blocks until the user dismisses the dialog.
+        """
+        return await self._core.call("ai.prompt_update", {})
