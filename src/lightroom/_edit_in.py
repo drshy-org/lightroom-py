@@ -5,8 +5,24 @@ expose), export selected photos to a temp dir, run an external tool on the
 files, then re-import the results as stacked siblings of the originals.
 
 Split: the Lua plugin handles export + reimport (catalog APIs); Python runs
-the external command via ``subprocess`` between the two. Keeps the Lua
-surface tiny.
+the external command via ``subprocess`` between the two.
+
+**Status (v0.2.0, verified against LR 15.3):**
+
+- :meth:`export` — ✅ working. Exports selected photos to a target dir at
+  the requested format/quality/color-space. This alone is useful: you get
+  rendered files you can pipe to Topaz, ImageMagick, a Python script, etc.
+
+- :meth:`import_as_stack` — ⚠️ **experimental**. The ``catalog:addPhoto``
+  call yields internally, and we haven't found the right LR-SDK access
+  primitive that works against LR Classic 15.3 inside our LrTasks dispatch
+  context. Calls succeed sometimes and fail with cryptic errors other
+  times. Treat as best-effort. As a workaround for failures, drag the
+  exported result file into LR manually after :meth:`export` returns.
+
+- :meth:`run` — ⚠️ **experimental** because it depends on
+  :meth:`import_as_stack` for the final step. The export + external-command
+  legs work fine on their own.
 """
 
 from __future__ import annotations
@@ -60,6 +76,14 @@ class EditInAPI:
         """Re-import processed files and stack each on top of its source photo.
 
         ``pairs`` is a list of ``{"src_uuid": "...", "result_path": "..."}``.
+
+        ⚠️ **Experimental in v0.2.0.** ``catalog:addPhoto`` yields internally
+        and we haven't pinned down the LR SDK access primitive that works
+        cleanly against LR Classic 15.3 from inside the bridge dispatcher.
+        Calls may fail with errors like "yieldToScheduler called when
+        yielding is not allowed" or "attempt to index a function value".
+        Manual workaround: after :meth:`export`, drag the result file into
+        LR's Library window — LR will auto-stack it.
         """
         if not pairs:
             raise ValueError("pairs must be a non-empty list")

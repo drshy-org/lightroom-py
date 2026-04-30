@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-04-29
+
+Phase 4 (Develop module) and Phase 5 (AI staging + Edit-In escape hatch). Verified end-to-end against Lightroom Classic 15.3 with a real photo catalog. Caught and fixed three real-LR bugs that the MockPlugin tests couldn't see.
+
+### Added
+
+#### Phase 4 — Develop module (verified end-to-end against real LR)
+- **Lua handlers**: `develop.list_presets`, `develop.apply_preset` (with optional folder disambiguation), `develop.apply_settings` (raw settings table), `develop.get_settings`, `develop.copy` (one src + many dsts in a single catalog walk), `develop.reset` (via `LrDevelopController.resetAllDevelopAdjustments` after switching to Develop module + selecting target), `develop.set` (live `LrDevelopController` slider control).
+- **Python `DevelopAPI`** with one method per Lua handler, fully typed.
+- **CLI**: `lightroom develop list-presets|apply-preset|apply-settings|get-settings|copy|reset|set`. The `set` command takes `SLIDER=VALUE` pairs (`set Exposure=0.3 Contrast=15`).
+- Verified live: `apply-settings` of `{"Exposure2012": 0.5, "Contrast2012": 25, "Saturation": 20}` produced exactly those values in the catalog; `reset` returned them to 0.
+
+#### Phase 5 — AI staging + Edit-In escape hatch
+- **`ai.stage_denoise` + `ai.prompt_update`** dispatchers and CLI commands (`lightroom ai stage-denoise|prompt-update`).
+- **`edit_in.export`** Lua handler using `LrExportSession` — fully working. Exports selected photos as TIFF/JPEG/PSD/DNG/ORIGINAL into a target dir, with quality + color-space options.
+- **`edit_in.import_as_stack`** Lua handler — experimental (see "Honest limitations" below).
+- **`EditInAPI.run()`** Python orchestrator: export → run external command (with `{input}` / `{output}` placeholders) → reimport. The export + external-command legs are solid; the reimport leg is the experimental piece.
+- **CLI**: `lightroom edit-in run|export`.
+- Verified live: `edit-in export` rendered a 13.7 MB JPEG to disk in seconds.
+
+### Fixed (caught against real LR 15.3 during validation)
+
+- **`develop.get_settings` failed with "attempt to call a string value"**. The `withReadAccessDo` wrapper turns out to break this code path in LR 15.3. Reads of per-photo metadata don't need an explicit access wrapper — call `photo:getDevelopSettings()` directly.
+- **`develop.reset` failed with "attempt to call method 'resetDevelopSettings' (a nil value)"**. `LrPhoto:resetDevelopSettings` doesn't exist in the LR SDK at all — that was a hallucination on my part. The canonical reset is `LrDevelopController.resetAllDevelopAdjustments()`, which acts on the active photo in the Develop module. Now: switch to Develop module, set each target as selection, reset.
+- **`metadata.set_color_label` casing** (already verified in v0.1.2): LR accepts lowercase input but stores capitalized. Documented.
+
+### Honest limitations (verified, documented in code)
+
+- **AI Denoise / Masks staging is currently a no-op.** The Lua handler writes `EnableAIDenoise` + `AIDenoiseAmount` keys via `applyDevelopSettings`, but LR silently drops them — Adobe hasn't documented public AI-feature keys for plugin authors. The dispatcher works; the LR side ignores the writes. Documented in `_ai.py` and SKILL.md. Practical workflow: agent stages whatever it can, then `lightroom ai prompt-update` to nudge the user to run **Enhance → Denoise…** in LR's UI.
+- **`edit_in.import_as_stack` is experimental.** `catalog:addPhoto` yields internally during thumbnail generation, and the LR-SDK access primitive that allows yields cleanly inside the bridge dispatcher hasn't been pinned down for LR Classic 15.3 (we tried `withWriteAccessDo({asynchronous=false})`, `withProlongedWriteAccessDo` with both signatures, and a fresh `LrTasks.startAsyncTask` wrapper — all hit different yield/index errors). The export side is fully working; users should drag the result file into LR manually as a workaround for the reimport step. Will revisit in v0.3.0 after studying Adobe's official `lightroom-sdk-8-examples` for the canonical `addPhoto` pattern.
+
+### Tests
+- 12 new tests via `CapturingPlugin` for develop / ai / edit_in handlers (56 total, was 44).
+- All tests use mock plugin responses, so they verify wire-level behaviour but can't catch wrong Lua API names — that's why we run a real-LR validation pass per release.
+
+### Real-LR validation log (this release)
+Field session against Lightroom Classic 15.3 with a 95-photo catalog, exercising every CLI subcommand. Results:
+- ✅ `bridge ping`, `catalog stats|info`, `photos list|count` (all filters)
+- ✅ `metadata add-keywords|remove-keywords|rate|color|set-iptc|write-xmp|read-xmp` (full round-trip + cleanup; 0 clears rating, "" clears color/caption)
+- ✅ `develop list-presets` (393 real LR presets), `apply-preset`, `apply-settings`, `get-settings`, `reset`, `set`
+- ✅ `edit-in export`
+- ⚠️ `edit-in run` (export + external-cmd OK, reimport-as-stack experimental)
+- ⚠️ `ai stage-denoise` (dispatch OK, LR ignores the keys — no-op)
+
 ## [0.1.2] — 2026-04-28
 
 End-to-end metadata writes verified against Lightroom Classic 15.3. Caught two real bugs that the mock-plugin tests couldn't see.

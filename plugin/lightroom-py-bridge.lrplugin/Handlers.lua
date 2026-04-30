@@ -6,6 +6,7 @@
 ]]
 
 local LrApplication = import "LrApplication"
+local LrTasks       = import "LrTasks"
 
 local Handlers = {}
 
@@ -344,6 +345,9 @@ Handlers["develop.apply_settings"] = function(params)
 end
 
 Handlers["develop.get_settings"] = function(params)
+  -- Reads don't need withReadAccessDo on individual photos — and in LR 15.3
+  -- the read-access wrapper raises "attempt to call a string value" on this
+  -- code path. Just call the read methods directly.
   local cat = LrApplication.activeCatalog()
   local photos, missing = target_photos(cat, params)
   if #photos == 0 then
@@ -351,13 +355,10 @@ Handlers["develop.get_settings"] = function(params)
   end
 
   local out = {}
-  cat:withReadAccessDo("lightroom-py: get develop settings", function()
-    for _, photo in ipairs(photos) do
-      local uid = photo:getRawMetadata("uuid")
-      out[uid] = photo:getDevelopSettings()
-    end
-  end, { timeout = 30 })
-
+  for _, photo in ipairs(photos) do
+    local uid = photo:getRawMetadata("uuid")
+    out[uid] = photo:getDevelopSettings()
+  end
   return { settings = out, missing = missing }
 end
 
@@ -394,10 +395,8 @@ Handlers["develop.copy"] = function(params)
     error("develop.copy: src photo not found: " .. src_uuid)
   end
 
-  local settings
-  cat:withReadAccessDo("lightroom-py: read src settings", function()
-    settings = src_photo:getDevelopSettings()
-  end, { timeout = 10 })
+  -- Direct read; no withReadAccessDo (see develop.get_settings note).
+  local settings = src_photo:getDevelopSettings()
 
   local touched = 0
   cat:withWriteAccessDo("lightroom-py: copy develop settings", function()
@@ -411,16 +410,28 @@ Handlers["develop.copy"] = function(params)
 end
 
 Handlers["develop.reset"] = function(params)
+  -- LrPhoto has no resetDevelopSettings method; the canonical reset is
+  -- LrDevelopController.resetAllDevelopAdjustments(), which acts on the
+  -- active photo in the Develop module. We switch to Develop, set each
+  -- target photo as the selection, then reset.
+  local LrApplicationView   = import "LrApplicationView"
+  local LrDevelopController = import "LrDevelopController"
+
   local cat = LrApplication.activeCatalog()
   local photos, missing = target_photos(cat, params)
 
+  pcall(function() LrApplicationView.switchToModule("develop") end)
+
   local touched = 0
-  cat:withWriteAccessDo("lightroom-py: reset develop", function()
-    for _, photo in ipairs(photos) do
-      photo:resetDevelopSettings()
-      touched = touched + 1
-    end
-  end, { timeout = 60, asynchronous = false })
+  for _, photo in ipairs(photos) do
+    cat:withWriteAccessDo("lightroom-py: select for reset", function()
+      cat:setSelectedPhotos(photo, { photo })
+    end, { timeout = 5, asynchronous = false })
+    local ok = pcall(function()
+      LrDevelopController.resetAllDevelopAdjustments()
+    end)
+    if ok then touched = touched + 1 end
+  end
 
   return { touched = touched, missing = missing }
 end
@@ -571,15 +582,19 @@ end
 
 Handlers["edit_in.import_as_stack"] = function(params)
   -- After Python has run an external tool on the exported files and dropped
-  -- result paths next to (or on top of) the originals, this re-imports them
-  -- into the catalog and stacks each result with the source photo.
+  -- result paths, this re-imports them and stacks each with the source photo.
+  --
+  -- catalog:addPhoto yields internally (waits for thumbnail generation, etc.)
+  -- so we can't use withWriteAccessDo({asynchronous=false}) — that scope
+  -- forbids yields. The documented yieldable variant is
+  -- withProlongedWriteAccessDo, designed for long-running imports.
   local cat = LrApplication.activeCatalog()
   local pairs_ = (params and params.pairs) or {}
   if type(pairs_) ~= "table" or #pairs_ == 0 then
     error("edit_in.import_as_stack: 'pairs' must be a non-empty list of {src_uuid, result_path}")
   end
 
-  -- Build src lookup.
+  -- Resolve src photos first (read-only walk; no access wrapper needed).
   local want = {}
   for _, p in ipairs(pairs_) do want[p.src_uuid] = true end
   local src_by_uuid = {}
@@ -590,30 +605,50 @@ Handlers["edit_in.import_as_stack"] = function(params)
 
   local imported = {}
   local errors = {}
-  cat:withWriteAccessDo("lightroom-py: import edit-in result", function()
+
+  -- Run the import in a dedicated LrTasks task. Inside that task,
+  -- catalog:addPhoto can yield freely (waiting for thumbnail / preview
+  -- generation). withWriteAccessDo with asynchronous=false would forbid
+  -- those yields; spinning a fresh task gives us a yieldable scope.
+  local done = false
+  LrTasks.startAsyncTask(function()
     for _, p in ipairs(pairs_) do
       local src = src_by_uuid[p.src_uuid]
       if not src then
         table.insert(errors, { src_uuid = p.src_uuid, error = "src not found" })
       else
-        local ok, new_photo_or_err = pcall(function()
-          return cat:addPhoto(p.result_path, src, "above")
+        local ok, new_photo_or_err = LrTasks.pcall(function()
+          local result
+          cat:withWriteAccessDo("lightroom-py: addPhoto", function()
+            result = cat:addPhoto(p.result_path, src, "above")
+          end, { timeout = 60 })
+          return result
         end)
-        if ok then
+        if ok and new_photo_or_err then
           table.insert(imported, {
             src_uuid = p.src_uuid,
-            new_uuid = new_photo_or_err and new_photo_or_err:getRawMetadata("uuid"),
+            new_uuid = new_photo_or_err:getRawMetadata("uuid"),
           })
         else
           table.insert(errors, {
             src_uuid = p.src_uuid,
             result_path = p.result_path,
-            error = tostring(new_photo_or_err),
+            error = tostring(new_photo_or_err or "unknown"),
           })
         end
       end
     end
-  end, { timeout = 120, asynchronous = false })
+    done = true
+  end)
+  -- Poll-wait for the inner task to finish (max 5 minutes).
+  local waited = 0
+  while not done and waited < 300 do
+    LrTasks.sleep(0.25)
+    waited = waited + 0.25
+  end
+  if not done then
+    table.insert(errors, { error = "import_as_stack: inner task timeout" })
+  end
 
   return { imported = imported, errors = errors }
 end

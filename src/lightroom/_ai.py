@@ -28,11 +28,22 @@ class AIAPI:
         strength: int = 50,
         photo_uuids: Iterable[str] | None = None,
     ) -> dict:
-        """Stage AI Denoise settings on the target photos.
+        """Stage AI Denoise settings on the target photos. **EXPERIMENTAL.**
 
-        ``strength`` is 0..100, mapping to LR's AI Denoise amount slider.
-        After staging, the user must run **Update AI Settings** in Lightroom
-        for the actual denoise model to compute.
+        ``strength`` is 0..100. The handler writes
+        ``EnableAIDenoise=true`` + ``AIDenoiseAmount=N`` into the photo's
+        develop settings via ``applyDevelopSettings``.
+
+        **Verified against LR 15.3: this is currently a no-op.** Those key
+        names are ignored by ``applyDevelopSettings`` — LR silently drops
+        keys it doesn't recognize, and Adobe hasn't documented a public AI
+        Denoise key for plugin authors. The call returns ``touched: N`` but
+        a follow-up ``develop get-settings`` shows no AI keys present. For
+        real AI Denoise compute, the user must run "Enhance → Denoise…"
+        from LR's UI manually.
+
+        Kept in the API for shape parity with PLAN.md's Phase 5; revisit if
+        Adobe documents the keys (or community reverse-engineers them).
         """
         if not 0 <= strength <= 100:
             raise ValueError(f"strength must be 0..100, got {strength}")
