@@ -1,6 +1,6 @@
 [project]
 name = "lightroom-py"
-version = "0.2.0"
+version = "0.3.0"
 description = "Unofficial Python library, CLI, and agent skill for automating Adobe Lightroom Classic"
 dynamic = ["readme"]
 requires-python = ">=3.10"
@@ -36,6 +36,7 @@ Issues = "https://github.com/henryshen/lightroom-py/issues"
 
 [project.optional-dependencies]
 exiftool = ["pyexiftool>=0.5.0"]
+mcp = ["mcp>=1.0.0"]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
@@ -47,10 +48,11 @@ dev = [
     "pre-commit>=4.0.0",
     "ruff>=0.8.0",
 ]
-all = ["lightroom-py[exiftool,dev]"]
+all = ["lightroom-py[exiftool,mcp,dev]"]
 
 [project.scripts]
 lightroom = "lightroom.lightroom_cli:main"
+lightroom-mcp = "lightroom.mcp_server:main"
 
 [build-system]
 requires = ["hatchling"]

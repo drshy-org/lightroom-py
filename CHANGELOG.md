@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-04-29
+
+Closes the Phase 5 / Phase 6 / Phase 7 scope from PLAN.md. Sub-clients that were stubs since v0.1.0 (Collections, Library) are now real. Edit-In reimport is fixed using the canonical `addPhoto` pattern researched from Adobe's SDK reference + community plugins. New optional MCP server adapter for Claude Desktop. CI workflow and full docs.
+
+### Added
+- **`CollectionsAPI`** (was Phase 3 debt): Lua + Python + CLI + 6 tests. `lr.collections.list / create / add / remove / delete / get_photos`. Walks regular, smart, and group collections.
+- **`LibraryAPI`** (was stubbed): Lua + Python + CLI + 5 tests. `lr.library.list_folders / export / make_virtual_copy / stack`. `import_photos` raises `NotImplementedError` with a clear message — same yieldability concern as edit-in import deferred until reimport-as-stack proves stable in production.
+- **Keyword hierarchy paths**: `metadata.add_keywords` now accepts pipe-separated paths like `"People|Family|Mom"`. Walks segments, creates each missing parent. Backward compatible with flat names.
+- **MCP server adapter** (`lightroom-mcp` console script, `pip install "lightroom-py[mcp]"`): exposes 15 tools to Claude Desktop. Thin wrapper over `LightroomClient`. Adds `mcp` optional dependency. See [docs/mcp.md](docs/mcp.md).
+- **CI workflow** (`.github/workflows/test.yml`): ruff check + ruff format + mypy + pytest on macOS + Linux × Python 3.10/3.11/3.12/3.13.
+- **Docs**: full [cli-reference.md](docs/cli-reference.md) (every subcommand), [python-api.md](docs/python-api.md) (every method), examples gallery (`docs/examples/cull_workflow.py`, `docs/examples/edit_in_imagemagick.py`).
+
+### Fixed
+- **`edit_in.import_as_stack`** — uses the canonical `catalog:withWriteAccessDo("name", function() catalog:addPhoto(path, src, "above") end, { timeout = 60 })` pattern per Adobe SDK reference + Automaat/lightroom-mcp + lightroom-alt-text-plugin precedent. No `asynchronous=false`, no inner `pcall`, no nested `LrTasks.startAsyncTask` wrapper. Verified in test suite; pending real-LR validation in next session.
+- **`_collections.list[str]` shadowing**: same class-scope shadowing fix as v0.1.0 collections sub-client; uses `_UUIDs = list[str]` alias.
+
+### Tests
+- 66 tests, was 56. +10 new (6 collections, 5 library minus 1 deleted overlap).
+- ruff + mypy clean across 37 source files.
+
+### Versions
+- `pyproject` 0.2.0 → 0.3.0
+- `__version__` 0.2.0 → 0.3.0
+- bridge server version 0.2.0 → 0.3.0
+- `PLUGIN_VERSION` 0.2.0 → 0.3.0
+- `Info.lua` VERSION 0.2.0 → 0.3.0
+
+### Documenting Phase 7 scope
+- ✅ MCP server adapter — done.
+- ⏭ Dual-`LrSocket` fast lane (MIDI2LR-style) — deferred. v0.3.0 polling latency hasn't been a real-world issue in any of our validation sessions.
+- ⏭ Cloud LR sub-client — deferred indefinitely. Partner-API gated, doesn't fit "Claude controls LR Classic" goal.
+
 ## [0.2.0] — 2026-04-29
 
 Phase 4 (Develop module) and Phase 5 (AI staging + Edit-In escape hatch). Verified end-to-end against Lightroom Classic 15.3 with a real photo catalog. Caught and fixed three real-LR bugs that the MockPlugin tests couldn't see.
