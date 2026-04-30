@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-04-29
+
+Real-LR validation pass against Lightroom Classic 15.3 with the v0.3.0 surface. Caught and fixed five real-LR bugs that the unit tests couldn't see, plus shipped hot-reload dev tooling so future iterations don't require LR restarts.
+
+### Added — hot-reload dev tooling
+- **`system.reload_handlers`** Lua handler: clears the cached Handlers module so the next dispatch re-reads from disk. Works around LR's sandboxed `package` table by using `dofile` + a global force-reload flag.
+- **`system.eval`**: run arbitrary Lua snippets via the bridge. Pref-gated (off by default; temporarily ungated in v0.3.1 for debugging — will restore the gate in v0.4).
+- **`system.tail_log`**: read the last N lines of `~/Documents/LrClassicLogs/lightroom-py.log`.
+- **`system.handler_list`**: enumerate every registered handler.
+- **CLI**: `lightroom bridge reload | eval | tail-log | handlers`.
+- **`BridgeRunner.lua`** now loads Handlers via `dofile(_PLUGIN.path .. "/Handlers.lua")` with a manual cache so the reload mechanism actually works (LR sandboxes `package.loaded`).
+
+After this release: handler-only edits go from a 3-minute reload cycle to ~5 seconds (`bridge install --force && bridge reload`).
+
+### Fixed (caught against real LR 15.3)
+- **`json.lua` decoded JSON `null` as a sentinel table** — broke any handler that did string ops on optional params. Now drops null keys from decoded objects entirely so `params.parent` is plain `nil`.
+- **`collections.list` failed on regular collections** with "This function can only be called by a smart collection" — `getSearchDescription()` errors when called on regulars. Wrap in `pcall` to detect smart-vs-regular safely.
+- **`find_collection_by_name` had a leftover `walk_collection_tree` call** that polluted the search and caused the same getSearchDescription error.
+- **Hierarchical keyword paths** (`add-keywords "A|B|C"`) failed with "bad argument #2 to 'format'" — root cause was `parent:getChildren()` yielding internally inside our non-yieldable `withWriteAccessDo` scope. Fix: skip the existence-check walk entirely; rely on `createKeyword`'s `returnExisting=true` flag for idempotency.
+- **`remove-keywords` didn't support hierarchical paths** — only matched top-level. Added `find_existing_keyword` that walks the tree (called outside `withWriteAccessDo` so `getChildren()` can yield freely).
+- **`edit_in.import_as_stack` previously experimental** — now verified working. Imported a real edited JPEG into the catalog stacked above the source. The canonical pattern from the SDK research turned out to be exactly right: `catalog:withWriteAccessDo("name", function() catalog:addPhoto(path, src, "above") end, { timeout = 60 })`.
+
+### Documented as not-implementable in LR Classic 15.3
+- **`library.make_virtual_copy`**: LR SDK does not expose `catalog:createVirtualCopies`, `catalog:createVirtualCopy`, or `photo:createVirtualCopy`. Virtual copies are a UI-only feature. Handler now raises a clear error pointing the user at LR's UI (Photo → Create Virtual Copy).
+- **`catalog:trashPhotos` / programmatic photo deletion**: not exposed in LR 15.3. Documented in the changelog so we don't waste time looking again.
+
+### Real-LR validation log (this session)
+- ✅ `bridge ping` — 0.3.1 plugin handshake
+- ✅ `bridge handlers` — 36 handlers registered including 4 system.* dev tools
+- ✅ `bridge reload` — hot-reload mechanism works
+- ✅ `bridge eval` — arbitrary Lua introspection works
+- ✅ `collections list / create / add / get-photos / remove / delete` — full round-trip
+- ✅ `library list-folders` — 1 folder shown correctly
+- ✅ `metadata add-keywords "A|B|C"` — hierarchical path created 3 keywords with proper parent chain
+- ✅ `metadata remove-keywords "A|B|C"` — leaf removed from photo
+- ✅ `edit-in run "cp {input} {output}"` — exported, processed, **imported as stack** (1 new photo in catalog)
+- ⚠️ `library make-virtual-copy` — not implementable in LR 15.3, documented
+
+### Tests + tooling
+- 66 tests still passing, ruff + mypy clean.
+- `lightroom-mcp` console script unchanged (still 15 tools exposed).
+- CI workflow unchanged.
+
+### Versions
+- `pyproject` 0.3.0 → 0.3.1
+- `__version__` 0.3.0 → 0.3.1
+- bridge server version 0.3.0 → 0.3.1
+- `PLUGIN_VERSION` 0.3.0 → 0.3.1
+- `Info.lua` VERSION unchanged at 0.3.0 (no manifest changes)
+
 ## [0.3.0] — 2026-04-29
 
 Closes the Phase 5 / Phase 6 / Phase 7 scope from PLAN.md. Sub-clients that were stubs since v0.1.0 (Collections, Library) are now real. Edit-In reimport is fixed using the canonical `addPhoto` pattern researched from Adobe's SDK reference + community plugins. New optional MCP server adapter for Claude Desktop. CI workflow and full docs.

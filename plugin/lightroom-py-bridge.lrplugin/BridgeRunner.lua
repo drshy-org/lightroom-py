@@ -19,13 +19,34 @@ local LrTasks    = import "LrTasks"
 local LrPrefs    = import "LrPrefs"
 local LrApplication = import "LrApplication"
 
-local json     = require "json"
-local Handlers = require "Handlers"
+local LrPathUtils = import "LrPathUtils"
+
+local json = require "json"
+
+-- LR sandboxes the global `package` table so `package.loaded[...] = nil`
+-- (the standard Lua module-cache reset) raises "attempt to index global
+-- 'package' (a nil value)". Workaround: load Handlers.lua via `dofile`
+-- directly and keep our own cache, which we can invalidate ourselves.
+--
+-- After a `system.reload_handlers` call (which sets the global flag below),
+-- the next dispatch re-reads Handlers.lua from disk.
+local _handlers_cache = nil
+
+local function get_handlers()
+  if _G.LR_PY_FORCE_RELOAD then
+    _handlers_cache = nil
+    _G.LR_PY_FORCE_RELOAD = nil
+  end
+  if _handlers_cache then return _handlers_cache end
+  local path = LrPathUtils.child(_PLUGIN.path, "Handlers.lua")
+  _handlers_cache = dofile(path)
+  return _handlers_cache
+end
 
 local logger = LrLogger("lightroom-py")
 logger:enable("logfile")
 
-local PLUGIN_VERSION = "0.3.0"
+local PLUGIN_VERSION = "0.3.1"
 
 local M = {}
 
@@ -99,6 +120,7 @@ end
 -- (success, result_or_err) but the wrapped function may yield. This is the
 -- canonical idiom in Adobe's own SDK examples.
 local function dispatch(method, params)
+  local Handlers = get_handlers()
   local handler = Handlers[method]
   if not handler then
     return false, nil, "unknown_method", "no handler for: " .. tostring(method)

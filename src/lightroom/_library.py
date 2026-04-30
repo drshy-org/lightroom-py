@@ -54,7 +54,14 @@ class LibraryAPI:
     ) -> dict:
         """Create a virtual copy of a photo.
 
-        Returns ``{"created": [{"src_uuid", "new_uuid"}, ...]}``.
+        ⚠️ **Not implementable in v0.3.0** (verified against LR Classic 15.3).
+        The Lightroom SDK does not expose a public API for creating virtual
+        copies — neither ``catalog:createVirtualCopies`` nor
+        ``photo:createVirtualCopy`` exists. Virtual copies remain a UI-only
+        feature. Use **Photo → Create Virtual Copy** in the LR UI manually.
+
+        Calling this method raises :class:`CommandFailedError` from the
+        bridge plugin with a clear message.
         """
         return await self._core.call(
             "library.make_virtual_copy",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import secrets
 import shutil
 from pathlib import Path
@@ -157,4 +158,104 @@ def ping(host: str | None, port: int | None, timeout: float) -> None:
         asyncio.run(_go())
     except Exception as exc:  # noqa: BLE001
         console.print(f"[red]Ping failed:[/red] {exc}")
+        raise SystemExit(1) from exc
+
+
+@bridge.command("reload")
+def reload() -> None:
+    """Hot-reload Handlers.lua without restarting Lightroom.
+
+    Clears the Lua require cache for our handler module so the next
+    dispatch picks up edits made on disk. Use after `lightroom bridge
+    install --force` when you've changed handler code.
+
+    BridgeRunner.lua and Info.lua changes still need a real LR restart.
+    """
+    from .. import LightroomClient
+
+    async def _go() -> None:
+        async with LightroomClient.connect() as lr:
+            result = await lr._core.call("system.reload_handlers", {})
+        console.print(f"[green]reloaded[/green]: {result}")
+
+    try:
+        asyncio.run(_go())
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]reload failed:[/red] {exc}")
+        raise SystemExit(1) from exc
+
+
+@bridge.command("eval")
+@click.argument("code")
+def eval_(code: str) -> None:
+    """Run an arbitrary Lua snippet in the plugin (dev tool, off by default).
+
+    To enable: in LR, Library → "lightroom-py: Configure...", or set
+    `prefs.enable_eval = true` via plugin prefs. Off by default for safety.
+
+    Pass '-' to read CODE from stdin.
+    """
+    import sys as _sys
+
+    from .. import LightroomClient
+
+    if code == "-":
+        code = _sys.stdin.read()
+
+    async def _go() -> None:
+        async with LightroomClient.connect() as lr:
+            result = await lr._core.call("system.eval", {"code": code})
+        console.print(json.dumps(result, indent=2, default=str))
+
+    try:
+        asyncio.run(_go())
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]eval failed:[/red] {exc}")
+        raise SystemExit(1) from exc
+
+
+@bridge.command("tail-log")
+@click.option("-n", "--lines", type=int, default=50, show_default=True)
+def tail_log(lines: int) -> None:
+    """Print the last N lines of the LR plugin's log file."""
+    from .. import LightroomClient
+
+    async def _go() -> None:
+        async with LightroomClient.connect() as lr:
+            result = await lr._core.call("system.tail_log", {"lines": lines})
+        if "error" in result:
+            console.print(f"[red]{result['error']}[/red]  path={result.get('path')}")
+            return
+        console.print(
+            f"[dim]{result.get('path')}  ({result.get('returned')}/{result.get('total')} lines)[/dim]"
+        )
+        for line in result.get("lines") or []:
+            console.print(line)
+
+    try:
+        asyncio.run(_go())
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]tail-log failed:[/red] {exc}")
+        raise SystemExit(1) from exc
+
+
+@bridge.command("handlers")
+def list_handlers() -> None:
+    """List every handler currently registered in the plugin (post-reload).
+
+    Use this after `bridge reload` to verify your new handlers loaded.
+    """
+    from .. import LightroomClient
+
+    async def _go() -> None:
+        async with LightroomClient.connect() as lr:
+            result = await lr._core.call("system.handler_list", {})
+        for name in result.get("handlers") or []:
+            console.print(name)
+        console.print(f"\n[dim]{result.get('count')} handlers[/dim]")
+
+    try:
+        asyncio.run(_go())
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]handlers failed:[/red] {exc}")
         raise SystemExit(1) from exc

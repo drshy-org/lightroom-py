@@ -175,7 +175,9 @@ local function parse_object(s, i)
     i = skip_ws(s, i + 1)
     local v, was_null
     v, i, was_null = parse(s, i)
-    if not was_null then res[key] = v else res[key] = json.null end
+    -- For object keys we drop nulls entirely so handler code can do plain
+    -- `params.foo` checks (a json.null sentinel table fails string ops).
+    if not was_null then res[key] = v end
     i = skip_ws(s, i)
     local c = s:sub(i,i)
     if c == "," then i = skip_ws(s, i + 1)

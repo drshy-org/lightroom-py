@@ -40,7 +40,7 @@ class LocalBridgeServer:
         host: str = "127.0.0.1",
         port: int = 8765,
         token: str | None = None,
-        version: str = "0.3.0",
+        version: str = "0.3.1",
     ) -> None:
         self.host = host
         self.port = port

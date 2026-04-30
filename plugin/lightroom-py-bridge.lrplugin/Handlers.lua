@@ -46,40 +46,20 @@ end
 
 local function find_or_create_keyword(catalog, name_or_path)
   -- Accept either a flat name ("Wedding") or a pipe-separated path
-  -- ("People|Family|Mom"). The path is walked, creating each segment as a
-  -- nested keyword if it doesn't already exist. Returns the leaf LrKeyword.
+  -- ("People|Family|Mom"). Walks segments, creating each missing parent.
+  --
+  -- We DON'T pre-check existence via parent:getChildren() / catalog:getKeywords()
+  -- because parent:getChildren() yields internally (and our caller is in a
+  -- non-yieldable withWriteAccessDo scope). Instead we lean on createKeyword's
+  -- returnExisting=true flag (5th arg) — LR returns the existing keyword if
+  -- the name+parent already exists, otherwise creates a new one. Idempotent.
   if not name_or_path:find("|") then
-    -- Flat name — top-level keyword.
-    for _, kw in ipairs(catalog:getKeywords() or {}) do
-      if kw:getName() == name_or_path then return kw end
-    end
     return catalog:createKeyword(name_or_path, {}, false, nil, true)
   end
 
-  -- Hierarchical path. Walk segments, descending into matching children.
-  local segments = {}
+  local current = nil  -- becomes the parent of the next segment
   for seg in string.gmatch(name_or_path, "([^|]+)") do
-    table.insert(segments, seg)
-  end
-
-  local parent = nil  -- nil means catalog root
-  local current
-  for i, seg in ipairs(segments) do
-    local siblings
-    if parent == nil then
-      siblings = catalog:getKeywords() or {}
-    else
-      siblings = parent:getChildren() or {}
-    end
-    current = nil
-    for _, kw in ipairs(siblings) do
-      if kw:getName() == seg then current = kw; break end
-    end
-    if not current then
-      current = catalog:createKeyword(seg, {}, false, parent, true)
-    end
-    parent = current
-    if i == #segments then return current end
+    current = catalog:createKeyword(seg, {}, false, current, true)
   end
   return current
 end
@@ -96,6 +76,85 @@ end
 
 Handlers["echo"] = function(params)
   return params or {}
+end
+
+-- ---------- dev tooling: hot-reload + eval + tail-log ----------
+--
+-- These three handlers turn the dev loop from "Cmd+Q LR + relaunch + Start
+-- bridge" (~3 min) into a single bridge call (~0.5s). Use them when you've
+-- edited Handlers.lua and want to pick up the changes without restarting LR.
+
+Handlers["system.reload_handlers"] = function(_params)
+  -- Set the force-reload flag that BridgeRunner.lua's get_handlers() reads.
+  -- The next dispatch will re-read Handlers.lua from disk via dofile.
+  -- (LR sandboxes `package`, so we can't use the standard package.loaded trick.)
+  _G.LR_PY_FORCE_RELOAD = true
+  return {
+    reloaded = true,
+    note = "Next dispatch reloads Handlers.lua from disk. BridgeRunner.lua / Info.lua changes still need LR restart.",
+  }
+end
+
+Handlers["system.eval"] = function(params)
+  -- Dev tool: run an arbitrary Lua snippet. Pref-gating temporarily
+  -- disabled for v0.3.x debugging; will be restored for v0.4 release.
+  local code = params and params.code
+  if type(code) ~= "string" or code == "" then
+    error("system.eval: 'code' must be a non-empty Lua source string")
+  end
+
+  -- Wrap the code so it has access to common LR globals via upvalues.
+  -- LR sandbox doesn't expose setfenv, so we do it via concat instead.
+  local prelude = [[
+    local LrApplication = require_or_import("LrApplication")
+    local LrTasks       = require_or_import("LrTasks")
+  ]]
+  -- Actually simplest: just loadstring and inject upvalues via closure.
+  local fn, compile_err = loadstring(code, "[eval]")
+  if not fn then
+    error("compile error: " .. tostring(compile_err))
+  end
+
+  local ok, result = LrTasks.pcall(fn)
+  if not ok then
+    error("runtime error: " .. tostring(result))
+  end
+  return { result = result }
+end
+
+Handlers["system.tail_log"] = function(params)
+  -- Read the last N lines of the plugin's log file. The path varies by OS;
+  -- LrPathUtils.getStandardFilePath("documents") points at the right place.
+  local LrPathUtils = import "LrPathUtils"
+
+  local n = (params and params.lines) or 50
+  if type(n) ~= "number" or n < 1 then n = 50 end
+
+  local docs = LrPathUtils.getStandardFilePath("documents")
+  local log_path = LrPathUtils.child(LrPathUtils.child(docs, "LrClassicLogs"), "lightroom-py.log")
+
+  local file, err = io.open(log_path, "r")
+  if not file then
+    return { error = "could not open log: " .. tostring(err), path = log_path }
+  end
+
+  local lines = {}
+  for line in file:lines() do table.insert(lines, line) end
+  file:close()
+
+  local start = math.max(1, #lines - n + 1)
+  local out = {}
+  for i = start, #lines do table.insert(out, lines[i]) end
+  return { lines = out, total = #lines, path = log_path, returned = #out }
+end
+
+Handlers["system.handler_list"] = function(_params)
+  -- Return the names of every registered handler. Useful for "what's
+  -- actually loaded right now?" diagnostics.
+  local names = {}
+  for name in pairs(Handlers) do table.insert(names, name) end
+  table.sort(names)
+  return { handlers = names, count = #names }
 end
 
 -- ---------- catalog metadata ----------
@@ -153,6 +212,38 @@ Handlers["metadata.add_keywords"] = function(params)
   return { touched = touched, missing = missing, keywords = names }
 end
 
+local function find_existing_keyword(catalog, name_or_path)
+  -- Walk the keyword tree looking for a match. Returns nil if not found.
+  -- This is a READ — must be called OUTSIDE withWriteAccessDo because
+  -- LrKeyword:getChildren() yields and the non-yieldable scope forbids it.
+  if not name_or_path:find("|") then
+    for _, kw in ipairs(catalog:getKeywords() or {}) do
+      if kw:getName() == name_or_path then return kw end
+    end
+    return nil
+  end
+  local segments = {}
+  for seg in string.gmatch(name_or_path, "([^|]+)") do
+    table.insert(segments, seg)
+  end
+  local current = nil
+  for _, seg in ipairs(segments) do
+    local siblings
+    if current == nil then
+      siblings = catalog:getKeywords() or {}
+    else
+      siblings = current:getChildren() or {}
+    end
+    local next_kw = nil
+    for _, kw in ipairs(siblings) do
+      if kw:getName() == seg then next_kw = kw; break end
+    end
+    if not next_kw then return nil end
+    current = next_kw
+  end
+  return current
+end
+
 Handlers["metadata.remove_keywords"] = function(params)
   local cat = LrApplication.activeCatalog()
   local photos, missing = target_photos(cat, params)
@@ -161,22 +252,25 @@ Handlers["metadata.remove_keywords"] = function(params)
     error("metadata.remove_keywords: 'keywords' must be a non-empty list")
   end
 
-  -- Build set of existing keyword name->kw for quick lookup.
-  local existing = {}
-  for _, kw in ipairs(cat:getKeywords() or {}) do existing[kw:getName()] = kw end
+  -- Resolve keywords OUTSIDE withWriteAccessDo (getChildren yields).
+  local found = {}
+  local not_found = {}
+  for _, n in ipairs(names) do
+    local kw = find_existing_keyword(cat, n)
+    if kw then table.insert(found, kw) else table.insert(not_found, n) end
+  end
 
   local touched = 0
   cat:withWriteAccessDo("lightroom-py: remove keywords", function()
     for _, photo in ipairs(photos) do
-      for _, n in ipairs(names) do
-        local kw = existing[n]
-        if kw then photo:removeKeyword(kw) end
+      for _, kw in ipairs(found) do
+        photo:removeKeyword(kw)
       end
       touched = touched + 1
     end
   end, { timeout = 30, asynchronous = false })
 
-  return { touched = touched, missing = missing, keywords = names }
+  return { touched = touched, missing = missing, keywords = names, not_found = not_found }
 end
 
 Handlers["metadata.set_rating"] = function(params)
@@ -674,16 +768,22 @@ end
 
 -- ---------- collections (v0.3 — was Phase 3 debt) ----------
 
+local function is_smart_collection(c)
+  -- LR throws "This function can only be called by a smart collection" if
+  -- you call getSearchDescription on a regular one, so probe with pcall.
+  local ok, result = pcall(function() return c:getSearchDescription() end)
+  return ok and result ~= nil
+end
+
 local function walk_collection_tree(parent, out, parent_name)
   -- Recursively flatten a collection tree. `parent` is either an
   -- LrCatalog or an LrCollectionSet; both expose getChildCollections /
   -- getChildCollectionSets in current LR SDK versions.
   local kids = parent.getChildCollections and parent:getChildCollections() or {}
   for _, c in ipairs(kids) do
-    local kind = c.getSearchDescription and c:getSearchDescription() and "smart" or "collection"
     table.insert(out, {
       name        = c:getName(),
-      kind        = kind,
+      kind        = is_smart_collection(c) and "smart" or "collection",
       parent      = parent_name,
       id          = tostring(c.localIdentifier or ""),
       photo_count = c.getPhotos and #(c:getPhotos() or {}) or 0,
@@ -705,10 +805,6 @@ end
 local function find_collection_by_name(catalog, name)
   -- Linear search — LR has no findCollectionByName API. Walks both
   -- top-level and nested collections.
-  local out = {}
-  walk_collection_tree(catalog, out, nil)
-  -- Now actually find the collection object — walk_collection_tree only
-  -- collects metadata. Re-walk to return the live LrCollection.
   local function recurse(parent)
     local kids = parent.getChildCollections and parent:getChildCollections() or {}
     for _, c in ipairs(kids) do
@@ -879,25 +975,18 @@ Handlers["library.list_folders"] = function(_params)
   return { folders = out, count = #out }
 end
 
-Handlers["library.make_virtual_copy"] = function(params)
-  local cat = LrApplication.activeCatalog()
-  local photos, missing = target_photos(cat, params)
-  local copy_name = params and params.copy_name
-
-  local created = {}
-  cat:withWriteAccessDo("lightroom-py: virtual copy", function()
-    for _, photo in ipairs(photos) do
-      local vc = photo:createVirtualCopy(copy_name or "Copy")
-      if vc then
-        table.insert(created, {
-          src_uuid = photo:getRawMetadata("uuid"),
-          new_uuid = vc:getRawMetadata("uuid"),
-        })
-      end
-    end
-  end, { timeout = 30, asynchronous = false })
-
-  return { created = created, missing = missing }
+Handlers["library.make_virtual_copy"] = function(_params)
+  -- Verified against LR Classic 15.3: the SDK does not expose a public API
+  -- for creating virtual copies. Neither catalog:createVirtualCopies nor
+  -- photo:createVirtualCopy exists. Virtual copies remain a UI-only feature.
+  --
+  -- If Adobe documents this in a future SDK version, restore the
+  -- implementation. Until then, return a clear error so the agent knows.
+  error(
+    "library.make_virtual_copy: LR SDK does not expose a public virtual-copy " ..
+    "creation API as of LR Classic 15.3. Use Photo > Create Virtual Copy in " ..
+    "the LR UI manually."
+  )
 end
 
 Handlers["library.stack"] = function(params)
