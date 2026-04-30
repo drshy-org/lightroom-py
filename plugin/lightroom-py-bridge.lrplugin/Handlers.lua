@@ -44,13 +44,44 @@ local function target_photos(catalog, params)
   return catalog:getTargetPhotos() or {}, {}
 end
 
-local function find_or_create_keyword(catalog, name)
-  -- Search top-level keywords by name. (Hierarchical paths like "A|B" not yet supported.)
-  local existing = catalog:getKeywords() or {}
-  for _, kw in ipairs(existing) do
-    if kw:getName() == name then return kw end
+local function find_or_create_keyword(catalog, name_or_path)
+  -- Accept either a flat name ("Wedding") or a pipe-separated path
+  -- ("People|Family|Mom"). The path is walked, creating each segment as a
+  -- nested keyword if it doesn't already exist. Returns the leaf LrKeyword.
+  if not name_or_path:find("|") then
+    -- Flat name — top-level keyword.
+    for _, kw in ipairs(catalog:getKeywords() or {}) do
+      if kw:getName() == name_or_path then return kw end
+    end
+    return catalog:createKeyword(name_or_path, {}, false, nil, true)
   end
-  return catalog:createKeyword(name, {}, false, nil, true)
+
+  -- Hierarchical path. Walk segments, descending into matching children.
+  local segments = {}
+  for seg in string.gmatch(name_or_path, "([^|]+)") do
+    table.insert(segments, seg)
+  end
+
+  local parent = nil  -- nil means catalog root
+  local current
+  for i, seg in ipairs(segments) do
+    local siblings
+    if parent == nil then
+      siblings = catalog:getKeywords() or {}
+    else
+      siblings = parent:getChildren() or {}
+    end
+    current = nil
+    for _, kw in ipairs(siblings) do
+      if kw:getName() == seg then current = kw; break end
+    end
+    if not current then
+      current = catalog:createKeyword(seg, {}, false, parent, true)
+    end
+    parent = current
+    if i == #segments then return current end
+  end
+  return current
 end
 
 -- ---------- diagnostics ----------
@@ -581,13 +612,19 @@ Handlers["edit_in.export"] = function(params)
 end
 
 Handlers["edit_in.import_as_stack"] = function(params)
-  -- After Python has run an external tool on the exported files and dropped
-  -- result paths, this re-imports them and stacks each with the source photo.
+  -- After Python has run an external tool on the exported files, re-import
+  -- each result and stack it on top of the source photo.
   --
-  -- catalog:addPhoto yields internally (waits for thumbnail generation, etc.)
-  -- so we can't use withWriteAccessDo({asynchronous=false}) — that scope
-  -- forbids yields. The documented yieldable variant is
-  -- withProlongedWriteAccessDo, designed for long-running imports.
+  -- The canonical pattern (per Adobe SDK reference + Automaat/lightroom-mcp +
+  -- gesteves/lightroom-alt-text-plugin):
+  --
+  --   catalog:withWriteAccessDo("name", function(context)
+  --     newPhoto = catalog:addPhoto(path, parentPhoto, "above")
+  --   end, { timeout = 60 })
+  --
+  -- Two-arg or three-arg form. NO `asynchronous=false` (would forbid the
+  -- yield that addPhoto performs internally). NO inner pcall (use
+  -- LrTasks.pcall at the dispatcher level if you need error trapping).
   local cat = LrApplication.activeCatalog()
   local pairs_ = (params and params.pairs) or {}
   if type(pairs_) ~= "table" or #pairs_ == 0 then
@@ -606,51 +643,288 @@ Handlers["edit_in.import_as_stack"] = function(params)
   local imported = {}
   local errors = {}
 
-  -- Run the import in a dedicated LrTasks task. Inside that task,
-  -- catalog:addPhoto can yield freely (waiting for thumbnail / preview
-  -- generation). withWriteAccessDo with asynchronous=false would forbid
-  -- those yields; spinning a fresh task gives us a yieldable scope.
-  local done = false
-  LrTasks.startAsyncTask(function()
-    for _, p in ipairs(pairs_) do
-      local src = src_by_uuid[p.src_uuid]
-      if not src then
-        table.insert(errors, { src_uuid = p.src_uuid, error = "src not found" })
+  for _, p in ipairs(pairs_) do
+    local src = src_by_uuid[p.src_uuid]
+    if not src then
+      table.insert(errors, { src_uuid = p.src_uuid, error = "src not found" })
+    else
+      local new_photo
+      local ok, err = LrTasks.pcall(function()
+        cat:withWriteAccessDo("lightroom-py: import edit-in result", function()
+          new_photo = cat:addPhoto(p.result_path, src, "above")
+        end, { timeout = 60 })
+      end)
+      if ok and new_photo then
+        table.insert(imported, {
+          src_uuid = p.src_uuid,
+          new_uuid = new_photo:getRawMetadata("uuid"),
+        })
       else
-        local ok, new_photo_or_err = LrTasks.pcall(function()
-          local result
-          cat:withWriteAccessDo("lightroom-py: addPhoto", function()
-            result = cat:addPhoto(p.result_path, src, "above")
-          end, { timeout = 60 })
-          return result
-        end)
-        if ok and new_photo_or_err then
-          table.insert(imported, {
-            src_uuid = p.src_uuid,
-            new_uuid = new_photo_or_err:getRawMetadata("uuid"),
-          })
-        else
-          table.insert(errors, {
-            src_uuid = p.src_uuid,
-            result_path = p.result_path,
-            error = tostring(new_photo_or_err or "unknown"),
-          })
-        end
+        table.insert(errors, {
+          src_uuid = p.src_uuid,
+          result_path = p.result_path,
+          error = tostring(err or "addPhoto returned nil"),
+        })
       end
     end
-    done = true
-  end)
-  -- Poll-wait for the inner task to finish (max 5 minutes).
-  local waited = 0
-  while not done and waited < 300 do
-    LrTasks.sleep(0.25)
-    waited = waited + 0.25
-  end
-  if not done then
-    table.insert(errors, { error = "import_as_stack: inner task timeout" })
   end
 
   return { imported = imported, errors = errors }
+end
+
+-- ---------- collections (v0.3 — was Phase 3 debt) ----------
+
+local function walk_collection_tree(parent, out, parent_name)
+  -- Recursively flatten a collection tree. `parent` is either an
+  -- LrCatalog or an LrCollectionSet; both expose getChildCollections /
+  -- getChildCollectionSets in current LR SDK versions.
+  local kids = parent.getChildCollections and parent:getChildCollections() or {}
+  for _, c in ipairs(kids) do
+    local kind = c.getSearchDescription and c:getSearchDescription() and "smart" or "collection"
+    table.insert(out, {
+      name        = c:getName(),
+      kind        = kind,
+      parent      = parent_name,
+      id          = tostring(c.localIdentifier or ""),
+      photo_count = c.getPhotos and #(c:getPhotos() or {}) or 0,
+    })
+  end
+  local sets = parent.getChildCollectionSets and parent:getChildCollectionSets() or {}
+  for _, s in ipairs(sets) do
+    table.insert(out, {
+      name        = s:getName(),
+      kind        = "group",
+      parent      = parent_name,
+      id          = tostring(s.localIdentifier or ""),
+      photo_count = 0,
+    })
+    walk_collection_tree(s, out, s:getName())
+  end
+end
+
+local function find_collection_by_name(catalog, name)
+  -- Linear search — LR has no findCollectionByName API. Walks both
+  -- top-level and nested collections.
+  local out = {}
+  walk_collection_tree(catalog, out, nil)
+  -- Now actually find the collection object — walk_collection_tree only
+  -- collects metadata. Re-walk to return the live LrCollection.
+  local function recurse(parent)
+    local kids = parent.getChildCollections and parent:getChildCollections() or {}
+    for _, c in ipairs(kids) do
+      if c:getName() == name then return c end
+    end
+    local sets = parent.getChildCollectionSets and parent:getChildCollectionSets() or {}
+    for _, s in ipairs(sets) do
+      local found = recurse(s)
+      if found then return found end
+    end
+    return nil
+  end
+  return recurse(catalog)
+end
+
+local function find_collection_set_by_name(catalog, name)
+  local function recurse(parent)
+    local sets = parent.getChildCollectionSets and parent:getChildCollectionSets() or {}
+    for _, s in ipairs(sets) do
+      if s:getName() == name then return s end
+      local found = recurse(s)
+      if found then return found end
+    end
+    return nil
+  end
+  return recurse(catalog)
+end
+
+Handlers["collections.list"] = function(_params)
+  local cat = LrApplication.activeCatalog()
+  local out = {}
+  walk_collection_tree(cat, out, nil)
+  return { collections = out, count = #out }
+end
+
+Handlers["collections.create"] = function(params)
+  local cat = LrApplication.activeCatalog()
+  local name = params and params.name
+  local parent_name = params and params.parent
+  if type(name) ~= "string" or name == "" then
+    error("collections.create: 'name' must be non-empty string")
+  end
+
+  local parent_set
+  if parent_name and parent_name ~= "" then
+    parent_set = find_collection_set_by_name(cat, parent_name)
+    if not parent_set then
+      error("collections.create: parent collection set not found: " .. parent_name)
+    end
+  end
+
+  local created
+  cat:withWriteAccessDo("lightroom-py: create collection", function()
+    -- LrCatalog:createCollection(name, parentSet?, returnExisting?) -> LrCollection
+    created = cat:createCollection(name, parent_set, true)
+  end, { timeout = 10, asynchronous = false })
+
+  return {
+    name        = created:getName(),
+    kind        = "collection",
+    parent      = parent_name,
+    id          = tostring(created.localIdentifier or ""),
+    photo_count = 0,
+  }
+end
+
+Handlers["collections.add"] = function(params)
+  local cat = LrApplication.activeCatalog()
+  local coll_name = params and params.collection
+  local uuids = (params and params.uuids) or {}
+  if type(coll_name) ~= "string" or coll_name == "" then
+    error("collections.add: 'collection' must be non-empty string")
+  end
+  if type(uuids) ~= "table" or #uuids == 0 then
+    error("collections.add: 'uuids' must be non-empty list")
+  end
+
+  local coll = find_collection_by_name(cat, coll_name)
+  if not coll then
+    error("collections.add: collection not found: " .. coll_name)
+  end
+
+  local photos, missing = lookup_photos_by_uuid(cat, uuids)
+  cat:withWriteAccessDo("lightroom-py: add to collection", function()
+    coll:addPhotos(photos)
+  end, { timeout = 30, asynchronous = false })
+
+  return { added = #photos, missing = missing }
+end
+
+Handlers["collections.remove"] = function(params)
+  local cat = LrApplication.activeCatalog()
+  local coll_name = params and params.collection
+  local uuids = (params and params.uuids) or {}
+  if type(coll_name) ~= "string" or coll_name == "" then
+    error("collections.remove: 'collection' must be non-empty string")
+  end
+
+  local coll = find_collection_by_name(cat, coll_name)
+  if not coll then
+    error("collections.remove: collection not found: " .. coll_name)
+  end
+
+  local photos, missing = lookup_photos_by_uuid(cat, uuids)
+  cat:withWriteAccessDo("lightroom-py: remove from collection", function()
+    coll:removePhotos(photos)
+  end, { timeout = 30, asynchronous = false })
+
+  return { removed = #photos, missing = missing }
+end
+
+Handlers["collections.delete"] = function(params)
+  local cat = LrApplication.activeCatalog()
+  local coll_name = params and params.collection
+  if type(coll_name) ~= "string" or coll_name == "" then
+    error("collections.delete: 'collection' must be non-empty string")
+  end
+
+  local coll = find_collection_by_name(cat, coll_name)
+  if not coll then
+    error("collections.delete: collection not found: " .. coll_name)
+  end
+
+  cat:withWriteAccessDo("lightroom-py: delete collection", function()
+    coll:delete()
+  end, { timeout = 10, asynchronous = false })
+
+  return { deleted = coll_name }
+end
+
+Handlers["collections.get_photos"] = function(params)
+  local cat = LrApplication.activeCatalog()
+  local coll_name = params and params.collection
+  if type(coll_name) ~= "string" or coll_name == "" then
+    error("collections.get_photos: 'collection' must be non-empty string")
+  end
+
+  local coll = find_collection_by_name(cat, coll_name)
+  if not coll then
+    error("collections.get_photos: collection not found: " .. coll_name)
+  end
+
+  local photos = coll:getPhotos() or {}
+  local uuids = {}
+  for _, p in ipairs(photos) do
+    table.insert(uuids, p:getRawMetadata("uuid"))
+  end
+  return { uuids = uuids, count = #uuids }
+end
+
+-- ---------- library (v0.3 — was Phase 3 debt) ----------
+
+Handlers["library.list_folders"] = function(_params)
+  local cat = LrApplication.activeCatalog()
+  local out = {}
+  -- LR catalog has root folders (drives) and child folders below.
+  local roots = cat.getFolders and cat:getFolders() or {}
+  local function walk(folder, depth)
+    table.insert(out, {
+      name = folder:getName(),
+      path = folder:getPath(),
+      depth = depth,
+    })
+    local kids = folder.getChildren and folder:getChildren() or {}
+    for _, kid in ipairs(kids) do walk(kid, depth + 1) end
+  end
+  for _, root in ipairs(roots) do walk(root, 0) end
+  return { folders = out, count = #out }
+end
+
+Handlers["library.make_virtual_copy"] = function(params)
+  local cat = LrApplication.activeCatalog()
+  local photos, missing = target_photos(cat, params)
+  local copy_name = params and params.copy_name
+
+  local created = {}
+  cat:withWriteAccessDo("lightroom-py: virtual copy", function()
+    for _, photo in ipairs(photos) do
+      local vc = photo:createVirtualCopy(copy_name or "Copy")
+      if vc then
+        table.insert(created, {
+          src_uuid = photo:getRawMetadata("uuid"),
+          new_uuid = vc:getRawMetadata("uuid"),
+        })
+      end
+    end
+  end, { timeout = 30, asynchronous = false })
+
+  return { created = created, missing = missing }
+end
+
+Handlers["library.stack"] = function(params)
+  -- Stack the given photos together. Position-zero is the top of the stack.
+  local cat = LrApplication.activeCatalog()
+  local uuids = (params and params.uuids) or {}
+  if type(uuids) ~= "table" or #uuids < 2 then
+    error("library.stack: need at least 2 uuids")
+  end
+
+  local photos, missing = lookup_photos_by_uuid(cat, uuids)
+  if #photos < 2 then
+    error("library.stack: fewer than 2 photos resolved (missing: " ..
+          table.concat(missing, ",") .. ")")
+  end
+
+  local top = photos[1]
+  cat:withWriteAccessDo("lightroom-py: stack", function()
+    -- LrPhoto has stackInFolderWithMode... varies by SDK. The portable
+    -- variant is to call cat:setStack(photos, top) where top is the photo
+    -- at position 0.
+    if top.stackInFolderWith then
+      for i = 2, #photos do top:stackInFolderWith(photos[i]) end
+    end
+  end, { timeout = 30, asynchronous = false })
+
+  return { stacked = #photos, missing = missing }
 end
 
 return Handlers

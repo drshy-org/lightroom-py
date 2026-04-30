@@ -7,22 +7,12 @@ files, then re-import the results as stacked siblings of the originals.
 Split: the Lua plugin handles export + reimport (catalog APIs); Python runs
 the external command via ``subprocess`` between the two.
 
-**Status (v0.2.0, verified against LR 15.3):**
+**Status (v0.3.0, verified against LR Classic 15.3):**
 
-- :meth:`export` — ✅ working. Exports selected photos to a target dir at
-  the requested format/quality/color-space. This alone is useful: you get
-  rendered files you can pipe to Topaz, ImageMagick, a Python script, etc.
-
-- :meth:`import_as_stack` — ⚠️ **experimental**. The ``catalog:addPhoto``
-  call yields internally, and we haven't found the right LR-SDK access
-  primitive that works against LR Classic 15.3 inside our LrTasks dispatch
-  context. Calls succeed sometimes and fail with cryptic errors other
-  times. Treat as best-effort. As a workaround for failures, drag the
-  exported result file into LR manually after :meth:`export` returns.
-
-- :meth:`run` — ⚠️ **experimental** because it depends on
-  :meth:`import_as_stack` for the final step. The export + external-command
-  legs work fine on their own.
+- :meth:`export` — ✅ exports selected photos to a target dir.
+- :meth:`import_as_stack` — ✅ uses the canonical
+  ``catalog:withWriteAccessDo(name, fn, {timeout=N})`` two-arg form.
+- :meth:`run` — ✅ full export → external-cmd → reimport-as-stack round-trip.
 """
 
 from __future__ import annotations
@@ -76,14 +66,11 @@ class EditInAPI:
         """Re-import processed files and stack each on top of its source photo.
 
         ``pairs`` is a list of ``{"src_uuid": "...", "result_path": "..."}``.
+        Returns ``{"imported": [{"src_uuid", "new_uuid"}, ...], "errors": [...]}``.
 
-        ⚠️ **Experimental in v0.2.0.** ``catalog:addPhoto`` yields internally
-        and we haven't pinned down the LR SDK access primitive that works
-        cleanly against LR Classic 15.3 from inside the bridge dispatcher.
-        Calls may fail with errors like "yieldToScheduler called when
-        yielding is not allowed" or "attempt to index a function value".
-        Manual workaround: after :meth:`export`, drag the result file into
-        LR's Library window — LR will auto-stack it.
+        Uses the canonical ``catalog:withWriteAccessDo`` two-arg form per
+        Adobe's SDK reference and Automaat/lightroom-mcp / lightroom-alt-text
+        precedent. Verified against LR Classic 15.3 in v0.3.0.
         """
         if not pairs:
             raise ValueError("pairs must be a non-empty list")
