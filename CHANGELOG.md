@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-05-01
+
+Feature catch-up sprint to close the gap with `znznzna/lightroom-cli` (124 commands). Adds 30 new verbs across develop / photos / mask / ai. Tests: 88 (was 66). Plugin handlers: 50+ (was 36).
+
+### Added — Develop module catch-up
+- **Tone curve** (`develop curve get|set|preset|linear|s-curve`). Channel-aware (`rgb` / `red` / `green` / `blue`); accepts custom point lists `[x1, y1, x2, y2, ...]` 0..255 or named presets `Linear / Medium Contrast / Strong Contrast`.
+- **Snapshots** (`develop snapshot create|list`). Wraps `LrPhoto:createDevelopSnapshot` and `getDevelopSnapshots`.
+- **Process version** (`develop process-version get|set`). Read/write `ProcessVersion` from develop settings (`11.0` for PV2012, `6.7` for PV2010, `5.0` for PV2003).
+- **Targeted resets**: `develop reset-crop`, `reset-masking`, `reset-spot`, `reset-redeye`, `reset-transforms`. Each clears a specific subset of develop settings without touching the rest.
+- **Paste-settings** (`develop paste-settings PAYLOAD_JSON --subset=...`). Mirrors LR's "Paste Settings…" dialog: pass the source photo's `get-settings` output and an optional comma-separated subset of keys.
+- **Masks read + clear** (`develop mask list|clear`). `mask list` summarizes counts of AI / gradient / circular / paint / retouch / red-eye masks per photo via `getDevelopSettings`. `mask clear --kind=all|ai|gradient|circular|paint` nils out the relevant settings keys.
+
+### Added — AI staging surface (honest no-ops)
+- `ai stage-select-subject` / `ai stage-select-sky` — write speculative `EnableSubjectSelectMask` / `EnableSkySelectMask` keys via `applyDevelopSettings`. **Same SDK gap as `ai stage-denoise`**: LR Classic 15.3 doesn't expose a public AI-mask compute trigger, so the keys are likely ignored. Documented honestly in docstrings + CLI yellow-warning text. Use LR's Masking panel manually for real subject/sky selection.
+
+### Added — Photos rich find + selection ops
+- **New `photos list / count` filters**: `--file-format` (RAW/JPG/TIFF/PSD/DNG/VIDEO), `--path-substring` (matches inside the absolute file path via SQL JOIN), `--color` (red/yellow/green/blue/purple/empty).
+- **`photos find-by-path SUBSTRING`**: alias for `list --path-substring`.
+- **Selection management**: `select-extend` (combine without replace), `select-all` / `select-none` / `select-inverse`, `next` / `previous` (move pivot through active source).
+- **Flags**: `flag-pick` / `flag-reject` / `flag-clear` (sets `pickStatus` to 1 / -1 / 0 respectively).
+- **Step verbs**: `rate-up` / `rate-down` (clamped 0..5; 0 → nil to clear), `color-cycle [--reverse]` (`""→red→yellow→green→blue→purple→""`).
+
+### Internals
+- 16 new Lua handlers (`develop.curve_*`, `develop.snapshot_*`, `develop.process_version_*`, `develop.reset_*`, `develop.paste_settings`, `develop.mask_list/clear`, `ai.stage_select_*`, `photos.select_extend/all/none/inverse/next/previous`, `photos.set_pick_status`, `photos.rating_step`, `photos.color_step`).
+- 30 new Python sub-client methods + 30 new CLI commands.
+- New SQLite WHERE clauses on `list_photos / count_photos`: `file_format`, `path_substring` (via `EXISTS (SELECT 1 FROM file JOIN folder JOIN root)` to construct full path inline), `color_label`.
+- 22 new tests (`tests/test_develop_v04.py`, `tests/test_photos_v04.py`).
+
+### Scope cuts vs original Phase B/D plan
+Punted to v0.5 in favor of shipping the catch-up faster:
+- **Develop local adjustments** (`develop local set/get/apply`) and **filter authoring** (`graduated/radial/brush/range`) — both require deep LR mask-data-table authoring; the SDK exposes the data shape but not all the geometry helpers, and our existing `apply-settings` already covers any known-key writes.
+- **Smart collection creation** — needs `LrCollectionSearchDescription` authoring (P2 in the gap analysis).
+- **Preview generation** — `edit-in export` already covers the "render to JPEG so Claude can see" use case.
+- **Schema-driven MCP** — current 15-tool MCP server is hand-curated; auto-deriving from one schema is a net-win refactor but doesn't ship new user features.
+
+### Versions
+- `pyproject` 0.3.1 → 0.4.0
+- `__version__` 0.3.1 → 0.4.0
+- bridge server version 0.3.1 → 0.4.0
+- `PLUGIN_VERSION` 0.3.1 → 0.4.0
+- `Info.lua` VERSION 0.3.0 → 0.4.0
+
+### Validation status
+Code-only release. Real-LR validation pending (bridge needs to be restarted for the v0.4.0 plugin). Expected bug surface: same Lua-yieldability and missing-API patterns as previous versions; hot-reload tooling makes any bugs found a fast iteration loop.
+
 ## [0.3.1] — 2026-04-29
 
 Real-LR validation pass against Lightroom Classic 15.3 with the v0.3.0 surface. Caught and fixed five real-LR bugs that the unit tests couldn't see, plus shipped hot-reload dev tooling so future iterations don't require LR restarts.
