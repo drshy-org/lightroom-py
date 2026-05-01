@@ -293,3 +293,42 @@ class DevelopAPI:
         if subset:
             params["subset"] = list(subset)
         return await self._core.call("develop.paste_settings", params)
+
+    # ---------- masks (v0.4) ----------
+
+    async def mask_list(
+        self,
+        *,
+        photo_uuids: Iterable[str] | None = None,
+    ) -> dict[str, dict[str, int]]:
+        """Summarize masks present on each target photo.
+
+        Returns ``{uuid: {ai_masks, gradient, circular, paint, retouch_areas, red_eye}}``
+        — counts of each mask category. Use :meth:`get_settings` for the
+        full per-mask geometry.
+
+        Reads via SQLite-backed ``getDevelopSettings`` (no writes).
+        """
+        result = await self._core.call(
+            "develop.mask_list",
+            {"uuids": list(photo_uuids or [])},
+        )
+        return result.get("masks") or {}
+
+    async def mask_clear(
+        self,
+        *,
+        kind: str = "all",
+        photo_uuids: Iterable[str] | None = None,
+    ) -> dict:
+        """Clear masks of the given ``kind``.
+
+        ``kind``: ``"all"`` (default) | ``"ai"`` | ``"gradient"`` | ``"circular"`` | ``"paint"``.
+        """
+        valid = {"all", "ai", "gradient", "circular", "paint"}
+        if kind not in valid:
+            raise ValueError(f"kind must be one of {sorted(valid)}, got {kind!r}")
+        return await self._core.call(
+            "develop.mask_clear",
+            {"kind": kind, "uuids": list(photo_uuids or [])},
+        )

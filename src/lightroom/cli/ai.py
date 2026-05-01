@@ -65,3 +65,44 @@ def prompt_update() -> None:
         console.print("[green]user acknowledged[/green]")
 
     asyncio.run(_go())
+
+
+@ai.command("stage-select-subject")
+@click.argument("uuids", nargs=-1)
+@click.option("--selection", is_flag=True)
+def stage_select_subject(uuids: tuple[str, ...], selection: bool) -> None:
+    """Stage AI Select-Subject mask. EXPERIMENTAL — LR likely ignores the keys."""
+    from .. import LightroomClient
+
+    photo_uuids = _parse_uuids(uuids, selection)
+
+    async def _go() -> None:
+        async with LightroomClient.connect() as lr:
+            result = await lr.ai.stage_select_subject(photo_uuids=photo_uuids)
+        console.print(
+            f"[yellow]staged select-subject (experimental)[/yellow] on "
+            f"{result.get('touched')} photo(s) — LR may ignore the keys; "
+            f"use the Masking panel manually for real subject selection."
+        )
+
+    asyncio.run(_go())
+
+
+@ai.command("stage-select-sky")
+@click.argument("uuids", nargs=-1)
+@click.option("--selection", is_flag=True)
+def stage_select_sky(uuids: tuple[str, ...], selection: bool) -> None:
+    """Stage AI Select-Sky mask. EXPERIMENTAL — LR likely ignores the keys."""
+    from .. import LightroomClient
+
+    photo_uuids = _parse_uuids(uuids, selection)
+
+    async def _go() -> None:
+        async with LightroomClient.connect() as lr:
+            result = await lr.ai.stage_select_sky(photo_uuids=photo_uuids)
+        console.print(
+            f"[yellow]staged select-sky (experimental)[/yellow] on "
+            f"{result.get('touched')} photo(s) — LR may ignore the keys."
+        )
+
+    asyncio.run(_go())

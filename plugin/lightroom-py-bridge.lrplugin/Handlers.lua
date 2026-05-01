@@ -899,6 +899,73 @@ Handlers["develop.paste_settings"] = function(params)
   end)() }
 end
 
+-- ---------- develop: masks read + clear (v0.4) ----------
+--
+-- HONEST LIMITS (verified against LR Classic 15.3 in v0.3.x):
+-- - Reading mask data from develop settings WORKS — masks live in
+--   MaskGroupBasedCorrections / GradientBasedCorrections / etc.
+-- - WRITING mask geometry (radial/graduated/brush points) WORKS via
+--   applyDevelopSettings — the keys are documented enough.
+-- - TRIGGERING AI mask creation (Select Subject / Sky / Object) does NOT
+--   work — same SDK gap as ai.stage_denoise. We expose stage-* handlers
+--   that write the keys; LR appears to silently ignore them.
+
+Handlers["develop.mask_list"] = function(params)
+  -- Returns a summary of masks present on each target photo. Doesn't
+  -- include full geometry — use develop.get_settings for the raw payload.
+  local cat = LrApplication.activeCatalog()
+  local photos, missing = target_photos(cat, params)
+  local out = {}
+  cat:withReadAccessDo("lightroom-py: mask list", function()
+    for _, photo in ipairs(photos) do
+      local s = photo:getDevelopSettings() or {}
+      local masks = {
+        ai_masks       = (s.MaskGroupBasedCorrections and #s.MaskGroupBasedCorrections) or 0,
+        gradient       = (s.GradientBasedCorrections and #s.GradientBasedCorrections) or 0,
+        circular       = (s.CircularGradientBasedCorrections and #s.CircularGradientBasedCorrections) or 0,
+        paint          = (s.PaintBasedCorrections and #s.PaintBasedCorrections) or 0,
+        retouch_areas  = (s.RetouchAreas and #s.RetouchAreas) or 0,
+        red_eye        = (s.RedEyeInfo and 1) or 0,
+      }
+      out[photo:getRawMetadata("uuid")] = masks
+    end
+  end, { timeout = 10 })
+  return { masks = out, missing = missing }
+end
+
+Handlers["develop.mask_clear"] = function(params)
+  -- Alias for reset_masking — exists for discoverability under
+  -- `lightroom develop mask clear`.
+  local cat = LrApplication.activeCatalog()
+  local photos, missing = target_photos(cat, params)
+  local kind = (params and params.kind) or "all"  -- all | ai | gradient | circular | paint
+  local clear_keys = {
+    all      = { "MaskGroupBasedCorrections", "GradientBasedCorrections",
+                 "CircularGradientBasedCorrections", "PaintBasedCorrections" },
+    ai       = { "MaskGroupBasedCorrections" },
+    gradient = { "GradientBasedCorrections" },
+    circular = { "CircularGradientBasedCorrections" },
+    paint    = { "PaintBasedCorrections" },
+  }
+  local keys = clear_keys[kind]
+  if not keys then
+    error("develop.mask_clear: invalid 'kind': " .. tostring(kind))
+  end
+
+  local touched = 0
+  cat:withWriteAccessDo("lightroom-py: clear masks", function()
+    for _, photo in ipairs(photos) do
+      local payload = {}
+      for _, k in ipairs(keys) do payload[k] = nil end
+      -- nil values don't survive the table → set sentinel to clear:
+      for _, k in ipairs(keys) do payload[k] = "" end
+      photo:applyDevelopSettings(payload)
+      touched = touched + 1
+    end
+  end, { timeout = 30, asynchronous = false })
+  return { touched = touched, missing = missing, kind = kind }
+end
+
 -- ---------- AI staging (Phase 5) ----------
 
 -- The LR SDK lets us write AI-feature parameters into a photo's develop
@@ -946,6 +1013,52 @@ Handlers["ai.prompt_update"] = function(_params)
     "info"
   )
   return { acknowledged = true }
+end
+
+-- The following stage_select_* handlers WRITE the AI mask settings into
+-- the photo's develop table. LR may silently ignore the writes (same gap
+-- as ai.stage_denoise — no public AI compute trigger in the SDK). Kept
+-- in the surface for parity with lightroom-cli; honest doc in Python API.
+
+Handlers["ai.stage_select_subject"] = function(params)
+  local cat = LrApplication.activeCatalog()
+  local photos, missing = target_photos(cat, params)
+  local touched = 0
+  cat:withWriteAccessDo("lightroom-py: stage select-subject", function()
+    for _, photo in ipairs(photos) do
+      photo:applyDevelopSettings({
+        -- Speculative key names — LR's AI mask schema isn't documented for plugins.
+        EnableSubjectSelectMask = true,
+        SubjectSelectMaskAmount = 1,
+      })
+      touched = touched + 1
+    end
+  end, { timeout = 30, asynchronous = false })
+  return {
+    touched = touched,
+    missing = missing,
+    note = "Settings staged. AI compute requires Update AI Settings in LR's UI.",
+  }
+end
+
+Handlers["ai.stage_select_sky"] = function(params)
+  local cat = LrApplication.activeCatalog()
+  local photos, missing = target_photos(cat, params)
+  local touched = 0
+  cat:withWriteAccessDo("lightroom-py: stage select-sky", function()
+    for _, photo in ipairs(photos) do
+      photo:applyDevelopSettings({
+        EnableSkySelectMask = true,
+        SkySelectMaskAmount = 1,
+      })
+      touched = touched + 1
+    end
+  end, { timeout = 30, asynchronous = false })
+  return {
+    touched = touched,
+    missing = missing,
+    note = "Settings staged. AI compute requires Update AI Settings in LR's UI.",
+  }
 end
 
 -- ---------- Edit-In escape hatch (Phase 5) ----------

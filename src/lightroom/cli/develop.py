@@ -468,6 +468,51 @@ def reset_transforms(uuids: tuple[str, ...], selection: bool) -> None:
 # ---------- paste-settings ----------
 
 
+@develop.group("mask")
+def mask() -> None:
+    """Mask read/clear (AI mask creation requires LR's UI; see `lightroom ai`)."""
+
+
+@mask.command("list")
+@click.argument("uuids", nargs=-1)
+@click.option("--selection", is_flag=True)
+def mask_list(uuids: tuple[str, ...], selection: bool) -> None:
+    """Summarize mask counts (ai/gradient/circular/paint/retouch_areas/red_eye)."""
+    from .. import LightroomClient
+
+    photo_uuids = _parse_uuids(uuids, selection)
+
+    async def _go() -> None:
+        async with LightroomClient.connect() as lr:
+            result = await lr.develop.mask_list(photo_uuids=photo_uuids)
+        console.print(json_lib.dumps(result, indent=2, default=str))
+
+    asyncio.run(_go())
+
+
+@mask.command("clear")
+@click.argument("uuids", nargs=-1)
+@click.option("--selection", is_flag=True)
+@click.option(
+    "--kind",
+    type=click.Choice(["all", "ai", "gradient", "circular", "paint"]),
+    default="all",
+    show_default=True,
+)
+def mask_clear(uuids: tuple[str, ...], selection: bool, kind: str) -> None:
+    """Clear masks of the given KIND."""
+    from .. import LightroomClient
+
+    photo_uuids = _parse_uuids(uuids, selection)
+
+    async def _go() -> None:
+        async with LightroomClient.connect() as lr:
+            result = await lr.develop.mask_clear(kind=kind, photo_uuids=photo_uuids)
+        console.print(f"[green]cleared {kind} masks[/green] on {result.get('touched')} photo(s)")
+
+    asyncio.run(_go())
+
+
 @develop.command("paste-settings")
 @click.argument("payload_json")
 @click.argument("uuids", nargs=-1)

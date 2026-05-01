@@ -58,3 +58,39 @@ class AIAPI:
         Blocks until the user dismisses the dialog.
         """
         return await self._core.call("ai.prompt_update", {})
+
+    async def stage_select_subject(
+        self,
+        *,
+        photo_uuids: Iterable[str] | None = None,
+    ) -> dict:
+        """Stage AI Select-Subject mask settings. **EXPERIMENTAL no-op (v0.4).**
+
+        Same SDK gap as :meth:`stage_denoise` — LR Classic 15.3 doesn't
+        expose a public API to trigger AI mask creation. The handler
+        writes ``EnableSubjectSelectMask`` keys but LR appears to ignore
+        them. Kept for surface parity with lightroom-cli; document the
+        limitation honestly to your users.
+
+        For real subject selection, use Lightroom's Develop module masking
+        panel manually after :meth:`prompt_update`.
+        """
+        return await self._core.call(
+            "ai.stage_select_subject",
+            {"uuids": list(photo_uuids or [])},
+        )
+
+    async def stage_select_sky(
+        self,
+        *,
+        photo_uuids: Iterable[str] | None = None,
+    ) -> dict:
+        """Stage AI Select-Sky mask settings. **EXPERIMENTAL no-op (v0.4).**
+
+        Same caveat as :meth:`stage_select_subject` — writes the keys but
+        LR likely ignores them. Use LR's UI for real sky masking.
+        """
+        return await self._core.call(
+            "ai.stage_select_sky",
+            {"uuids": list(photo_uuids or [])},
+        )
