@@ -589,6 +589,316 @@ Handlers["develop.set"] = function(params)
   return { applied = applied }
 end
 
+-- ---------- develop: tone curve (v0.4) ----------
+--
+-- LR stores tone curves in develop settings as ToneCurvePV2012* — flat
+-- arrays of [x1,y1,x2,y2,...] where x and y are 0..255. Per-channel curves
+-- live at ToneCurvePV2012Red / Green / Blue. Named presets set
+-- ToneCurveName2012 to a known string ("Linear", "Medium Contrast",
+-- "Strong Contrast"); LR resolves the name to the canonical points.
+
+Handlers["develop.curve_get"] = function(params)
+  local cat = LrApplication.activeCatalog()
+  local photos, missing = target_photos(cat, params)
+  local channel = (params and params.channel) or "rgb"  -- rgb | red | green | blue
+  if #photos == 0 then
+    error("develop.curve_get: no target photo")
+  end
+  local key_map = {
+    rgb   = "ToneCurvePV2012",
+    red   = "ToneCurvePV2012Red",
+    green = "ToneCurvePV2012Green",
+    blue  = "ToneCurvePV2012Blue",
+  }
+  local key = key_map[channel]
+  if not key then error("develop.curve_get: invalid channel: " .. tostring(channel)) end
+
+  local out = {}
+  cat:withReadAccessDo("lightroom-py: get curve", function()
+    for _, photo in ipairs(photos) do
+      local s = photo:getDevelopSettings() or {}
+      out[photo:getRawMetadata("uuid")] = {
+        name = s.ToneCurveName2012,
+        points = s[key] or {},
+        channel = channel,
+      }
+    end
+  end, { timeout = 10 })
+  return { curves = out, missing = missing }
+end
+
+Handlers["develop.curve_set"] = function(params)
+  local cat = LrApplication.activeCatalog()
+  local photos, missing = target_photos(cat, params)
+  local points = params and params.points
+  local channel = (params and params.channel) or "rgb"
+  if type(points) ~= "table" or #points < 4 or #points % 2 ~= 0 then
+    error("develop.curve_set: 'points' must be a flat array of [x1,y1,x2,y2,...] with even length >= 4")
+  end
+  local key_map = {
+    rgb   = "ToneCurvePV2012",
+    red   = "ToneCurvePV2012Red",
+    green = "ToneCurvePV2012Green",
+    blue  = "ToneCurvePV2012Blue",
+  }
+  local key = key_map[channel]
+  if not key then error("develop.curve_set: invalid channel: " .. tostring(channel)) end
+
+  local settings = { [key] = points }
+  -- Setting a custom curve overrides any named preset; clear the name on rgb.
+  if channel == "rgb" then settings.ToneCurveName2012 = "Custom" end
+
+  local touched = 0
+  cat:withWriteAccessDo("lightroom-py: set curve", function()
+    for _, photo in ipairs(photos) do
+      photo:applyDevelopSettings(settings)
+      touched = touched + 1
+    end
+  end, { timeout = 30, asynchronous = false })
+  return { touched = touched, missing = missing, channel = channel }
+end
+
+Handlers["develop.curve_preset"] = function(params)
+  -- Apply a named tone curve preset: "Linear", "Medium Contrast", "Strong Contrast".
+  local cat = LrApplication.activeCatalog()
+  local photos, missing = target_photos(cat, params)
+  local name = params and params.name
+  local valid = { Linear = true, ["Medium Contrast"] = true, ["Strong Contrast"] = true, Custom = true }
+  if not valid[name] then
+    error("develop.curve_preset: 'name' must be Linear | Medium Contrast | Strong Contrast | Custom; got " .. tostring(name))
+  end
+
+  local touched = 0
+  cat:withWriteAccessDo("lightroom-py: curve preset", function()
+    for _, photo in ipairs(photos) do
+      photo:applyDevelopSettings({ ToneCurveName2012 = name })
+      touched = touched + 1
+    end
+  end, { timeout = 30, asynchronous = false })
+  return { touched = touched, missing = missing, name = name }
+end
+
+-- ---------- develop: snapshots (v0.4) ----------
+
+Handlers["develop.snapshot_create"] = function(params)
+  local cat = LrApplication.activeCatalog()
+  local photos, missing = target_photos(cat, params)
+  local name = params and params.name
+  if type(name) ~= "string" or name == "" then
+    error("develop.snapshot_create: 'name' must be a non-empty string")
+  end
+
+  local created = {}
+  cat:withWriteAccessDo("lightroom-py: snapshot create", function()
+    for _, photo in ipairs(photos) do
+      -- LrPhoto:createDevelopSnapshot(name [, includeHistory])
+      local ok, snap_or_err = pcall(function() return photo:createDevelopSnapshot(name, true) end)
+      if ok then
+        table.insert(created, { uuid = photo:getRawMetadata("uuid"), name = name, ok = true })
+      else
+        table.insert(created, { uuid = photo:getRawMetadata("uuid"), error = tostring(snap_or_err) })
+      end
+    end
+  end, { timeout = 30, asynchronous = false })
+  return { created = created, missing = missing }
+end
+
+Handlers["develop.snapshot_list"] = function(params)
+  local cat = LrApplication.activeCatalog()
+  local photos, missing = target_photos(cat, params)
+
+  local out = {}
+  cat:withReadAccessDo("lightroom-py: snapshot list", function()
+    for _, photo in ipairs(photos) do
+      local snaps = {}
+      local ok, list = pcall(function() return photo:getDevelopSnapshots() end)
+      if ok and type(list) == "table" then
+        for _, s in ipairs(list) do
+          table.insert(snaps, { name = s, })
+        end
+      end
+      out[photo:getRawMetadata("uuid")] = snaps
+    end
+  end, { timeout = 10 })
+  return { snapshots = out, missing = missing }
+end
+
+-- ---------- develop: process version (v0.4) ----------
+
+Handlers["develop.process_version_get"] = function(params)
+  local cat = LrApplication.activeCatalog()
+  local photos, missing = target_photos(cat, params)
+  if #photos == 0 then error("develop.process_version_get: no target photo") end
+
+  local out = {}
+  cat:withReadAccessDo("lightroom-py: get process version", function()
+    for _, photo in ipairs(photos) do
+      local s = photo:getDevelopSettings() or {}
+      out[photo:getRawMetadata("uuid")] = s.ProcessVersion or "unknown"
+    end
+  end, { timeout = 10 })
+  return { versions = out, missing = missing }
+end
+
+Handlers["develop.process_version_set"] = function(params)
+  local cat = LrApplication.activeCatalog()
+  local photos, missing = target_photos(cat, params)
+  local version = params and params.version
+  -- LR process versions: "5.0" (PV2003), "6.7" (PV2010), "11.0" (PV2012)
+  -- Newer versions (since LR 7): "11.0" remains; LR uses the same string.
+  if type(version) ~= "string" or version == "" then
+    error("develop.process_version_set: 'version' must be a non-empty string (e.g. '11.0')")
+  end
+
+  local touched = 0
+  cat:withWriteAccessDo("lightroom-py: set process version", function()
+    for _, photo in ipairs(photos) do
+      photo:applyDevelopSettings({ ProcessVersion = version })
+      touched = touched + 1
+    end
+  end, { timeout = 30, asynchronous = false })
+  return { touched = touched, missing = missing, version = version }
+end
+
+-- ---------- develop: targeted resets (v0.4) ----------
+-- These wrap LrDevelopController.resetX functions which only act on the
+-- active photo in the Develop module. Switch module + select target first.
+
+local function _reset_via_controller(photos, action_name, controller_method_name)
+  local LrDevelopController = import "LrDevelopController"
+  local LrApplicationView = import "LrApplicationView"
+  pcall(function() LrApplicationView.switchToModule("develop") end)
+
+  local cat = LrApplication.activeCatalog()
+  local touched = 0
+  for _, photo in ipairs(photos) do
+    cat:withWriteAccessDo(action_name, function()
+      cat:setSelectedPhotos(photo, { photo })
+    end, { timeout = 5, asynchronous = false })
+    local ok, err = pcall(function()
+      local fn = LrDevelopController[controller_method_name]
+      if type(fn) == "function" then fn() end
+    end)
+    if ok then touched = touched + 1 end
+  end
+  return touched
+end
+
+Handlers["develop.reset_crop"] = function(params)
+  local cat = LrApplication.activeCatalog()
+  local photos, missing = target_photos(cat, params)
+  local touched = _reset_via_controller(photos, "lightroom-py: reset crop", "resetCrop")
+  return { touched = touched, missing = missing }
+end
+
+Handlers["develop.reset_masking"] = function(params)
+  local cat = LrApplication.activeCatalog()
+  local photos, missing = target_photos(cat, params)
+  -- Clear masks via develop settings: mask data lives in MaskGroupBasedCorrections etc.
+  local touched = 0
+  cat:withWriteAccessDo("lightroom-py: reset masking", function()
+    for _, photo in ipairs(photos) do
+      photo:applyDevelopSettings({
+        MaskGroupBasedCorrections = nil,
+        RetouchAreas = nil,
+        CircularGradientBasedCorrections = nil,
+        GradientBasedCorrections = nil,
+        PaintBasedCorrections = nil,
+      })
+      touched = touched + 1
+    end
+  end, { timeout = 30, asynchronous = false })
+  return { touched = touched, missing = missing }
+end
+
+Handlers["develop.reset_spot"] = function(params)
+  local cat = LrApplication.activeCatalog()
+  local photos, missing = target_photos(cat, params)
+  local touched = 0
+  cat:withWriteAccessDo("lightroom-py: reset spot", function()
+    for _, photo in ipairs(photos) do
+      photo:applyDevelopSettings({ RetouchAreas = nil })
+      touched = touched + 1
+    end
+  end, { timeout = 30, asynchronous = false })
+  return { touched = touched, missing = missing }
+end
+
+Handlers["develop.reset_redeye"] = function(params)
+  local cat = LrApplication.activeCatalog()
+  local photos, missing = target_photos(cat, params)
+  local touched = 0
+  cat:withWriteAccessDo("lightroom-py: reset red-eye", function()
+    for _, photo in ipairs(photos) do
+      photo:applyDevelopSettings({ RedEyeInfo = nil })
+      touched = touched + 1
+    end
+  end, { timeout = 30, asynchronous = false })
+  return { touched = touched, missing = missing }
+end
+
+Handlers["develop.reset_transforms"] = function(params)
+  local cat = LrApplication.activeCatalog()
+  local photos, missing = target_photos(cat, params)
+  local touched = 0
+  cat:withWriteAccessDo("lightroom-py: reset transforms", function()
+    for _, photo in ipairs(photos) do
+      photo:applyDevelopSettings({
+        PerspectiveUpright = 0,
+        PerspectiveVertical = 0,
+        PerspectiveHorizontal = 0,
+        PerspectiveRotate = 0,
+        PerspectiveScale = 100,
+        PerspectiveAspect = 0,
+        PerspectiveX = 0,
+        PerspectiveY = 0,
+      })
+      touched = touched + 1
+    end
+  end, { timeout = 30, asynchronous = false })
+  return { touched = touched, missing = missing }
+end
+
+-- ---------- develop: paste-settings + batch-apply (v0.4) ----------
+
+Handlers["develop.paste_settings"] = function(params)
+  -- Apply a develop-settings dict to many photos (alias of apply_settings,
+  -- but accepts an optional `subset` filter to paste only specific keys —
+  -- mirrors LR's "Paste Settings…" dialog).
+  local cat = LrApplication.activeCatalog()
+  local photos, missing = target_photos(cat, params)
+  local settings = params and params.settings
+  local subset  = params and params.subset  -- optional list of keys to paste
+  if type(settings) ~= "table" or next(settings) == nil then
+    error("develop.paste_settings: 'settings' must be a non-empty object")
+  end
+
+  -- If subset is provided, filter the settings dict to only those keys.
+  local payload = settings
+  if type(subset) == "table" and #subset > 0 then
+    payload = {}
+    local want = {}
+    for _, k in ipairs(subset) do want[k] = true end
+    for k, v in pairs(settings) do
+      if want[k] then payload[k] = v end
+    end
+  end
+
+  local touched = 0
+  cat:withWriteAccessDo("lightroom-py: paste settings", function()
+    for _, photo in ipairs(photos) do
+      photo:applyDevelopSettings(payload)
+      touched = touched + 1
+    end
+  end, { timeout = 60, asynchronous = false })
+
+  return { touched = touched, missing = missing, applied_keys = (function()
+    local k = {}
+    for key, _ in pairs(payload) do table.insert(k, key) end
+    return k
+  end)() }
+end
+
 -- ---------- AI staging (Phase 5) ----------
 
 -- The LR SDK lets us write AI-feature parameters into a photo's develop

@@ -177,3 +177,335 @@ def set_(kvs: tuple[str, ...]) -> None:
         console.print(json_lib.dumps(result, indent=2, default=str))
 
     asyncio.run(_go())
+
+
+# ===================================================================
+# v0.4 additions: tone curve, snapshots, process version, targeted
+# resets, paste-settings.
+# ===================================================================
+
+
+# ---------- tone curve ----------
+
+
+@develop.group("curve")
+def curve() -> None:
+    """Tone curve get/set/preset on the RGB or per-channel curves."""
+
+
+@curve.command("get")
+@click.argument("uuid")
+@click.option("--channel", type=click.Choice(["rgb", "red", "green", "blue"]), default="rgb")
+def curve_get(uuid: str, channel: str) -> None:
+    """Print the tone curve for a photo on CHANNEL (rgb/red/green/blue)."""
+    from .. import LightroomClient
+
+    async def _go() -> None:
+        async with LightroomClient.connect() as lr:
+            result = await lr.develop.curve_get(uuid, channel=channel)
+        console.print(json_lib.dumps(result, indent=2, default=str))
+
+    asyncio.run(_go())
+
+
+@curve.command("set")
+@click.argument("points")
+@click.argument("uuids", nargs=-1)
+@click.option("--selection", is_flag=True)
+@click.option("--channel", type=click.Choice(["rgb", "red", "green", "blue"]), default="rgb")
+def curve_set(points: str, uuids: tuple[str, ...], selection: bool, channel: str) -> None:
+    """Apply a custom tone curve. POINTS is a JSON array `[x1,y1,x2,y2,...]` 0..255."""
+    from .. import LightroomClient
+
+    try:
+        pts = json_lib.loads(points)
+    except json_lib.JSONDecodeError as exc:
+        raise click.BadParameter(f"invalid JSON points list: {exc}") from exc
+    if not isinstance(pts, list):
+        raise click.BadParameter("points must be a JSON list of numbers")
+
+    photo_uuids = _parse_uuids(uuids, selection)
+
+    async def _go() -> None:
+        async with LightroomClient.connect() as lr:
+            result = await lr.develop.curve_set(pts, channel=channel, photo_uuids=photo_uuids)
+        console.print(
+            f"[green]curve set[/green] on {result.get('touched')} photo(s), channel={channel}"
+        )
+
+    asyncio.run(_go())
+
+
+@curve.command("preset")
+@click.argument(
+    "name", type=click.Choice(["Linear", "Medium Contrast", "Strong Contrast", "Custom"])
+)
+@click.argument("uuids", nargs=-1)
+@click.option("--selection", is_flag=True)
+def curve_preset(name: str, uuids: tuple[str, ...], selection: bool) -> None:
+    """Apply a named tone-curve preset."""
+    from .. import LightroomClient
+
+    photo_uuids = _parse_uuids(uuids, selection)
+
+    async def _go() -> None:
+        async with LightroomClient.connect() as lr:
+            result = await lr.develop.curve_preset(name, photo_uuids=photo_uuids)
+        console.print(f"[green]curve preset[/green] '{name}' on {result.get('touched')} photo(s)")
+
+    asyncio.run(_go())
+
+
+@curve.command("linear")
+@click.argument("uuids", nargs=-1)
+@click.option("--selection", is_flag=True)
+def curve_linear(uuids: tuple[str, ...], selection: bool) -> None:
+    """Shortcut for `curve preset Linear`."""
+    from .. import LightroomClient
+
+    photo_uuids = _parse_uuids(uuids, selection)
+
+    async def _go() -> None:
+        async with LightroomClient.connect() as lr:
+            result = await lr.develop.curve_preset("Linear", photo_uuids=photo_uuids)
+        console.print(f"[green]linear curve[/green] on {result.get('touched')} photo(s)")
+
+    asyncio.run(_go())
+
+
+@curve.command("s-curve")
+@click.argument("uuids", nargs=-1)
+@click.option("--selection", is_flag=True)
+@click.option("--strength", type=click.Choice(["medium", "strong"]), default="medium")
+def curve_s(uuids: tuple[str, ...], selection: bool, strength: str) -> None:
+    """Shortcut for `curve preset 'Medium Contrast' / 'Strong Contrast'`."""
+    from .. import LightroomClient
+
+    photo_uuids = _parse_uuids(uuids, selection)
+    name = "Medium Contrast" if strength == "medium" else "Strong Contrast"
+
+    async def _go() -> None:
+        async with LightroomClient.connect() as lr:
+            result = await lr.develop.curve_preset(name, photo_uuids=photo_uuids)
+        console.print(f"[green]{name}[/green] on {result.get('touched')} photo(s)")
+
+    asyncio.run(_go())
+
+
+# ---------- snapshots ----------
+
+
+@develop.group("snapshot")
+def snapshot() -> None:
+    """Develop snapshots — frozen states of a photo's edits."""
+
+
+@snapshot.command("create")
+@click.argument("name")
+@click.argument("uuids", nargs=-1)
+@click.option("--selection", is_flag=True)
+def snapshot_create(name: str, uuids: tuple[str, ...], selection: bool) -> None:
+    """Create a develop snapshot named NAME on each target photo."""
+    from .. import LightroomClient
+
+    photo_uuids = _parse_uuids(uuids, selection)
+
+    async def _go() -> None:
+        async with LightroomClient.connect() as lr:
+            result = await lr.develop.snapshot_create(name, photo_uuids=photo_uuids)
+        console.print(json_lib.dumps(result, indent=2, default=str))
+
+    asyncio.run(_go())
+
+
+@snapshot.command("list")
+@click.argument("uuids", nargs=-1)
+@click.option("--selection", is_flag=True)
+def snapshot_list(uuids: tuple[str, ...], selection: bool) -> None:
+    """List snapshots for the target photos."""
+    from .. import LightroomClient
+
+    photo_uuids = _parse_uuids(uuids, selection)
+
+    async def _go() -> None:
+        async with LightroomClient.connect() as lr:
+            result = await lr.develop.snapshot_list(photo_uuids=photo_uuids)
+        console.print(json_lib.dumps(result, indent=2, default=str))
+
+    asyncio.run(_go())
+
+
+# ---------- process version ----------
+
+
+@develop.group("process-version")
+def process_version() -> None:
+    """Get/set the develop process version (PV2003=5.0, PV2010=6.7, PV2012=11.0)."""
+
+
+@process_version.command("get")
+@click.argument("uuid")
+def process_version_get(uuid: str) -> None:
+    """Print the process version for a photo."""
+    from .. import LightroomClient
+
+    async def _go() -> None:
+        async with LightroomClient.connect() as lr:
+            v = await lr.develop.process_version_get(uuid)
+        console.print(v)
+
+    asyncio.run(_go())
+
+
+@process_version.command("set")
+@click.argument("version")
+@click.argument("uuids", nargs=-1)
+@click.option("--selection", is_flag=True)
+def process_version_set(version: str, uuids: tuple[str, ...], selection: bool) -> None:
+    """Set the process version (e.g. `11.0` for PV2012)."""
+    from .. import LightroomClient
+
+    photo_uuids = _parse_uuids(uuids, selection)
+
+    async def _go() -> None:
+        async with LightroomClient.connect() as lr:
+            result = await lr.develop.process_version_set(version, photo_uuids=photo_uuids)
+        console.print(
+            f"[green]process version={version}[/green] on {result.get('touched')} photo(s)"
+        )
+
+    asyncio.run(_go())
+
+
+# ---------- targeted resets ----------
+
+
+@develop.command("reset-crop")
+@click.argument("uuids", nargs=-1)
+@click.option("--selection", is_flag=True)
+def reset_crop(uuids: tuple[str, ...], selection: bool) -> None:
+    """Reset only the crop (switches to Develop module per photo)."""
+    from .. import LightroomClient
+
+    photo_uuids = _parse_uuids(uuids, selection)
+
+    async def _go() -> None:
+        async with LightroomClient.connect() as lr:
+            result = await lr.develop.reset_crop(photo_uuids=photo_uuids)
+        console.print(f"[green]reset crop[/green] on {result.get('touched')} photo(s)")
+
+    asyncio.run(_go())
+
+
+@develop.command("reset-masking")
+@click.argument("uuids", nargs=-1)
+@click.option("--selection", is_flag=True)
+def reset_masking(uuids: tuple[str, ...], selection: bool) -> None:
+    """Clear all masks (mask groups, gradient/circular/paint corrections)."""
+    from .. import LightroomClient
+
+    photo_uuids = _parse_uuids(uuids, selection)
+
+    async def _go() -> None:
+        async with LightroomClient.connect() as lr:
+            result = await lr.develop.reset_masking(photo_uuids=photo_uuids)
+        console.print(f"[green]reset masking[/green] on {result.get('touched')} photo(s)")
+
+    asyncio.run(_go())
+
+
+@develop.command("reset-spot")
+@click.argument("uuids", nargs=-1)
+@click.option("--selection", is_flag=True)
+def reset_spot(uuids: tuple[str, ...], selection: bool) -> None:
+    """Clear spot-removal / healing edits."""
+    from .. import LightroomClient
+
+    photo_uuids = _parse_uuids(uuids, selection)
+
+    async def _go() -> None:
+        async with LightroomClient.connect() as lr:
+            result = await lr.develop.reset_spot(photo_uuids=photo_uuids)
+        console.print(f"[green]reset spot[/green] on {result.get('touched')} photo(s)")
+
+    asyncio.run(_go())
+
+
+@develop.command("reset-redeye")
+@click.argument("uuids", nargs=-1)
+@click.option("--selection", is_flag=True)
+def reset_redeye(uuids: tuple[str, ...], selection: bool) -> None:
+    """Clear red-eye corrections."""
+    from .. import LightroomClient
+
+    photo_uuids = _parse_uuids(uuids, selection)
+
+    async def _go() -> None:
+        async with LightroomClient.connect() as lr:
+            result = await lr.develop.reset_redeye(photo_uuids=photo_uuids)
+        console.print(f"[green]reset red-eye[/green] on {result.get('touched')} photo(s)")
+
+    asyncio.run(_go())
+
+
+@develop.command("reset-transforms")
+@click.argument("uuids", nargs=-1)
+@click.option("--selection", is_flag=True)
+def reset_transforms(uuids: tuple[str, ...], selection: bool) -> None:
+    """Reset upright/perspective/lens transforms."""
+    from .. import LightroomClient
+
+    photo_uuids = _parse_uuids(uuids, selection)
+
+    async def _go() -> None:
+        async with LightroomClient.connect() as lr:
+            result = await lr.develop.reset_transforms(photo_uuids=photo_uuids)
+        console.print(f"[green]reset transforms[/green] on {result.get('touched')} photo(s)")
+
+    asyncio.run(_go())
+
+
+# ---------- paste-settings ----------
+
+
+@develop.command("paste-settings")
+@click.argument("payload_json")
+@click.argument("uuids", nargs=-1)
+@click.option("--selection", is_flag=True)
+@click.option("--subset", help="Comma-separated keys to paste (default: all keys in PAYLOAD_JSON).")
+def paste_settings(
+    payload_json: str,
+    uuids: tuple[str, ...],
+    selection: bool,
+    subset: str | None,
+) -> None:
+    """Paste develop settings to many photos. Mirror of LR's "Paste Settings…" dialog.
+
+    PAYLOAD_JSON is e.g. the output of `lightroom develop get-settings <uuid>`.
+    Pass '-' to read from stdin.
+    """
+    from .. import LightroomClient
+
+    if payload_json == "-":
+        import sys
+
+        payload_json = sys.stdin.read()
+    try:
+        settings = json_lib.loads(payload_json)
+    except json_lib.JSONDecodeError as exc:
+        raise click.BadParameter(f"invalid JSON: {exc}") from exc
+
+    photo_uuids = _parse_uuids(uuids, selection)
+    subset_keys = [k.strip() for k in (subset or "").split(",") if k.strip()] or None
+
+    async def _go() -> None:
+        async with LightroomClient.connect() as lr:
+            result = await lr.develop.paste_settings(
+                settings, subset=subset_keys, photo_uuids=photo_uuids
+            )
+        console.print(
+            f"[green]pasted {len(result.get('applied_keys', []))} key(s)[/green] "
+            f"to {result.get('touched')} photo(s)"
+        )
+
+    asyncio.run(_go())

@@ -109,3 +109,187 @@ class DevelopAPI:
         if not slider_values:
             raise ValueError("at least one slider=value pair required")
         return await self._core.call("develop.set", {"values": slider_values})
+
+    # ---------- tone curve (v0.4) ----------
+
+    async def curve_get(
+        self,
+        photo_uuid: str,
+        *,
+        channel: str = "rgb",
+    ) -> dict[str, Any]:
+        """Return the tone curve for one photo on the given channel.
+
+        ``channel``: one of ``"rgb"``, ``"red"``, ``"green"``, ``"blue"``.
+        Returns ``{"name": "Linear|Medium Contrast|...|Custom",
+        "points": [x1, y1, x2, y2, ...], "channel": ...}``.
+        """
+        if channel not in {"rgb", "red", "green", "blue"}:
+            raise ValueError(f"channel must be rgb/red/green/blue, got {channel!r}")
+        result = await self._core.call(
+            "develop.curve_get",
+            {"uuids": [photo_uuid], "channel": channel},
+        )
+        return (result.get("curves") or {}).get(photo_uuid) or {}
+
+    async def curve_set(
+        self,
+        points: list[float],
+        *,
+        channel: str = "rgb",
+        photo_uuids: Iterable[str] | None = None,
+    ) -> dict:
+        """Apply a custom tone curve.
+
+        ``points`` is a flat list of ``[x1, y1, x2, y2, ...]`` where x and y
+        are 0..255. Must have even length ≥ 4.
+        """
+        if channel not in {"rgb", "red", "green", "blue"}:
+            raise ValueError(f"channel must be rgb/red/green/blue, got {channel!r}")
+        if len(points) < 4 or len(points) % 2 != 0:
+            raise ValueError("points must be a flat [x,y,...] list with even length ≥ 4")
+        return await self._core.call(
+            "develop.curve_set",
+            {"points": list(points), "channel": channel, "uuids": list(photo_uuids or [])},
+        )
+
+    async def curve_preset(
+        self,
+        name: str,
+        *,
+        photo_uuids: Iterable[str] | None = None,
+    ) -> dict:
+        """Apply a named tone-curve preset.
+
+        ``name``: one of ``"Linear"``, ``"Medium Contrast"``,
+        ``"Strong Contrast"``, ``"Custom"``.
+        """
+        valid = {"Linear", "Medium Contrast", "Strong Contrast", "Custom"}
+        if name not in valid:
+            raise ValueError(f"name must be one of {sorted(valid)}, got {name!r}")
+        return await self._core.call(
+            "develop.curve_preset",
+            {"name": name, "uuids": list(photo_uuids or [])},
+        )
+
+    # ---------- snapshots (v0.4) ----------
+
+    async def snapshot_create(
+        self,
+        name: str,
+        *,
+        photo_uuids: Iterable[str] | None = None,
+    ) -> dict:
+        """Create a develop snapshot named ``name`` on each target photo."""
+        if not name:
+            raise ValueError("name must be non-empty")
+        return await self._core.call(
+            "develop.snapshot_create",
+            {"name": name, "uuids": list(photo_uuids or [])},
+        )
+
+    async def snapshot_list(
+        self,
+        *,
+        photo_uuids: Iterable[str] | None = None,
+    ) -> dict[str, list[dict]]:
+        """List develop snapshots for the target photos.
+
+        Returns ``{uuid: [{"name": "..."}, ...], ...}``.
+        """
+        result = await self._core.call(
+            "develop.snapshot_list",
+            {"uuids": list(photo_uuids or [])},
+        )
+        return result.get("snapshots") or {}
+
+    # ---------- process version (v0.4) ----------
+
+    async def process_version_get(self, photo_uuid: str) -> str:
+        """Return the photo's process version (e.g. ``"11.0"`` for PV2012)."""
+        result = await self._core.call(
+            "develop.process_version_get",
+            {"uuids": [photo_uuid]},
+        )
+        return (result.get("versions") or {}).get(photo_uuid, "unknown")
+
+    async def process_version_set(
+        self,
+        version: str,
+        *,
+        photo_uuids: Iterable[str] | None = None,
+    ) -> dict:
+        """Set the process version. Common values: ``"11.0"`` (PV2012),
+        ``"6.7"`` (PV2010), ``"5.0"`` (PV2003)."""
+        if not version:
+            raise ValueError("version must be non-empty")
+        return await self._core.call(
+            "develop.process_version_set",
+            {"version": version, "uuids": list(photo_uuids or [])},
+        )
+
+    # ---------- targeted resets (v0.4) ----------
+
+    async def reset_crop(self, *, photo_uuids: Iterable[str] | None = None) -> dict:
+        """Reset only the crop. (Switches to Develop module per photo.)"""
+        return await self._core.call(
+            "develop.reset_crop",
+            {"uuids": list(photo_uuids or [])},
+        )
+
+    async def reset_masking(self, *, photo_uuids: Iterable[str] | None = None) -> dict:
+        """Clear all masks (mask groups, gradient/circular/paint corrections)."""
+        return await self._core.call(
+            "develop.reset_masking",
+            {"uuids": list(photo_uuids or [])},
+        )
+
+    async def reset_spot(self, *, photo_uuids: Iterable[str] | None = None) -> dict:
+        """Clear spot-removal / healing edits."""
+        return await self._core.call(
+            "develop.reset_spot",
+            {"uuids": list(photo_uuids or [])},
+        )
+
+    async def reset_redeye(self, *, photo_uuids: Iterable[str] | None = None) -> dict:
+        """Clear red-eye corrections."""
+        return await self._core.call(
+            "develop.reset_redeye",
+            {"uuids": list(photo_uuids or [])},
+        )
+
+    async def reset_transforms(
+        self,
+        *,
+        photo_uuids: Iterable[str] | None = None,
+    ) -> dict:
+        """Reset upright / perspective / lens-correction transforms."""
+        return await self._core.call(
+            "develop.reset_transforms",
+            {"uuids": list(photo_uuids or [])},
+        )
+
+    # ---------- paste-settings (v0.4) ----------
+
+    async def paste_settings(
+        self,
+        settings: dict[str, Any],
+        *,
+        subset: list[str] | None = None,
+        photo_uuids: Iterable[str] | None = None,
+    ) -> dict:
+        """Apply a settings dict to many photos, optionally filtered by ``subset``.
+
+        Mirrors LR's "Paste Settings…" dialog: pass the source photo's
+        :meth:`get_settings` output as ``settings`` and a ``subset`` list to
+        only paste specific keys.
+        """
+        if not settings:
+            raise ValueError("settings must be a non-empty dict")
+        params: dict[str, Any] = {
+            "settings": settings,
+            "uuids": list(photo_uuids or []),
+        }
+        if subset:
+            params["subset"] = list(subset)
+        return await self._core.call("develop.paste_settings", params)
