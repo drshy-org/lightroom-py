@@ -253,6 +253,9 @@ def list_photos(
     since: str | None = None,
     until: str | None = None,
     limit: int | None = None,
+    file_format: str | None = None,
+    path_substring: str | None = None,
+    color_label: str | None = None,
 ) -> list[PhotoRow]:
     """Filter Adobe_images via SQL; return uniform :class:`PhotoRow`s.
 
@@ -275,6 +278,27 @@ def list_photos(
     if until is not None:
         where.append("img.captureTime <= ?")
         params.append(until)
+    if file_format is not None:
+        # LR stores fileFormat as 'RAW', 'JPG', 'TIFF', 'PSD', 'DNG', 'VIDEO', etc.
+        where.append("UPPER(img.fileFormat) = UPPER(?)")
+        params.append(file_format)
+    if color_label is not None:
+        # LR stores colorLabels as 'Red', 'Yellow', 'Green', 'Blue', 'Purple', or '' (none).
+        # Pass lowercase from caller; LR stores capitalized.
+        if color_label == "":
+            where.append("(img.colorLabels = '' OR img.colorLabels IS NULL)")
+        else:
+            where.append("LOWER(img.colorLabels) = LOWER(?)")
+            params.append(color_label)
+    if path_substring is not None:
+        where.append(
+            "EXISTS (SELECT 1 FROM AgLibraryFile f2 "
+            "JOIN AgLibraryFolder fol2 ON fol2.id_local = f2.folder "
+            "JOIN AgLibraryRootFolder root2 ON root2.id_local = fol2.rootFolder "
+            "WHERE f2.id_local = img.rootFile AND "
+            "(root2.absolutePath || COALESCE(fol2.pathFromRoot, '') || f2.idx_filename) LIKE ?)"
+        )
+        params.append(f"%{path_substring}%")
     if camera is not None:
         where.append(
             "EXISTS (SELECT 1 FROM AgHarvestedExifMetadata e "

@@ -187,6 +187,185 @@ Handlers["photos.select"] = function(params)
   return { selected = #matched, missing = missing }
 end
 
+Handlers["photos.select_extend"] = function(params)
+  local cat = LrApplication.activeCatalog()
+  local new_matched, missing = lookup_photos_by_uuid(cat, (params and params.uuids) or {})
+
+  -- Combine existing selection with new uuids.
+  local current = cat:getTargetPhotos() or {}
+  local combined = {}
+  local seen = {}
+  for _, p in ipairs(current) do
+    local uid = p:getRawMetadata("uuid")
+    if not seen[uid] then table.insert(combined, p); seen[uid] = true end
+  end
+  for _, p in ipairs(new_matched) do
+    local uid = p:getRawMetadata("uuid")
+    if not seen[uid] then table.insert(combined, p); seen[uid] = true end
+  end
+
+  cat:withWriteAccessDo("lightroom-py: extend selection", function()
+    cat:setSelectedPhotos(combined[1], combined)
+  end, { timeout = 5, asynchronous = false })
+
+  return { selected = #combined, added = #new_matched, missing = missing }
+end
+
+Handlers["photos.select_all"] = function(_params)
+  -- "Select all" in LR's current view means selecting all photos in the
+  -- active source. There's no clean API for this; the closest is
+  -- catalog:getActiveSources() + getPhotosForSource. Pragmatic fallback:
+  -- select everything currently in catalog:getTargetPhotos() if a multi-
+  -- photo target is active, else all photos (warning: large catalogs).
+  local cat = LrApplication.activeCatalog()
+  -- Use getMultipleSelectedOrAllPhotos which respects the active filter.
+  local photos = cat:getMultipleSelectedOrAllPhotos() or {}
+
+  cat:withWriteAccessDo("lightroom-py: select all", function()
+    cat:setSelectedPhotos(photos[1], photos)
+  end, { timeout = 5, asynchronous = false })
+
+  return { selected = #photos }
+end
+
+Handlers["photos.select_none"] = function(_params)
+  local cat = LrApplication.activeCatalog()
+  cat:withWriteAccessDo("lightroom-py: select none", function()
+    cat:setSelectedPhotos(nil, {})
+  end, { timeout = 5, asynchronous = false })
+  return { selected = 0 }
+end
+
+Handlers["photos.select_inverse"] = function(_params)
+  -- Invert: photos in active filter that are NOT in current selection.
+  local cat = LrApplication.activeCatalog()
+  local all = cat:getMultipleSelectedOrAllPhotos() or {}
+  local current = cat:getTargetPhotos() or {}
+  local in_selection = {}
+  for _, p in ipairs(current) do in_selection[p:getRawMetadata("uuid")] = true end
+
+  local inverted = {}
+  for _, p in ipairs(all) do
+    local uid = p:getRawMetadata("uuid")
+    if not in_selection[uid] then table.insert(inverted, p) end
+  end
+
+  cat:withWriteAccessDo("lightroom-py: select inverse", function()
+    cat:setSelectedPhotos(inverted[1], inverted)
+  end, { timeout = 5, asynchronous = false })
+  return { selected = #inverted }
+end
+
+Handlers["photos.next"] = function(_params)
+  -- LR exposes "next/previous" via menu commands; the SDK has no direct
+  -- API. Use LrTasks.startAsyncTask + LrSelection if available; fall back
+  -- to manually advancing the selection within the active source.
+  local cat = LrApplication.activeCatalog()
+  local current = cat:getTargetPhotos() or {}
+  if #current == 0 then return { moved = false, reason = "no current selection" } end
+
+  local pivot = current[#current]  -- advance from the last selected
+  local all = cat:getMultipleSelectedOrAllPhotos() or {}
+  local pivot_uid = pivot:getRawMetadata("uuid")
+  local idx
+  for i, p in ipairs(all) do
+    if p:getRawMetadata("uuid") == pivot_uid then idx = i; break end
+  end
+  if not idx or idx >= #all then return { moved = false, reason = "at end of source" } end
+
+  local next_photo = all[idx + 1]
+  cat:withWriteAccessDo("lightroom-py: next photo", function()
+    cat:setSelectedPhotos(next_photo, { next_photo })
+  end, { timeout = 5, asynchronous = false })
+  return { moved = true, uuid = next_photo:getRawMetadata("uuid") }
+end
+
+Handlers["photos.previous"] = function(_params)
+  local cat = LrApplication.activeCatalog()
+  local current = cat:getTargetPhotos() or {}
+  if #current == 0 then return { moved = false, reason = "no current selection" } end
+
+  local pivot = current[1]
+  local all = cat:getMultipleSelectedOrAllPhotos() or {}
+  local pivot_uid = pivot:getRawMetadata("uuid")
+  local idx
+  for i, p in ipairs(all) do
+    if p:getRawMetadata("uuid") == pivot_uid then idx = i; break end
+  end
+  if not idx or idx <= 1 then return { moved = false, reason = "at start of source" } end
+
+  local prev = all[idx - 1]
+  cat:withWriteAccessDo("lightroom-py: previous photo", function()
+    cat:setSelectedPhotos(prev, { prev })
+  end, { timeout = 5, asynchronous = false })
+  return { moved = true, uuid = prev:getRawMetadata("uuid") }
+end
+
+Handlers["photos.set_pick_status"] = function(params)
+  local cat = LrApplication.activeCatalog()
+  local photos, missing = target_photos(cat, params)
+  local status = params and params.status
+  if type(status) ~= "number" or (status ~= -1 and status ~= 0 and status ~= 1) then
+    error("photos.set_pick_status: 'status' must be -1 (reject), 0 (none), or 1 (pick)")
+  end
+
+  local touched = 0
+  cat:withWriteAccessDo("lightroom-py: set pick status", function()
+    for _, photo in ipairs(photos) do
+      photo:setRawMetadata("pickStatus", status)
+      touched = touched + 1
+    end
+  end, { timeout = 30, asynchronous = false })
+  return { touched = touched, missing = missing, status = status }
+end
+
+Handlers["photos.rating_step"] = function(params)
+  local cat = LrApplication.activeCatalog()
+  local photos, missing = target_photos(cat, params)
+  local delta = params and params.delta
+  if type(delta) ~= "number" then
+    error("photos.rating_step: 'delta' must be a number (e.g. +1 or -1)")
+  end
+
+  local touched = 0
+  cat:withWriteAccessDo("lightroom-py: rating step", function()
+    for _, photo in ipairs(photos) do
+      local cur = photo:getRawMetadata("rating") or 0
+      local new = math.max(0, math.min(5, cur + delta))
+      -- LR rejects 0; pass nil to clear instead.
+      photo:setRawMetadata("rating", (new == 0) and nil or new)
+      touched = touched + 1
+    end
+  end, { timeout = 30, asynchronous = false })
+  return { touched = touched, missing = missing, delta = delta }
+end
+
+Handlers["photos.color_step"] = function(params)
+  local cat = LrApplication.activeCatalog()
+  local photos, missing = target_photos(cat, params)
+  local direction = params and params.direction
+  if type(direction) ~= "number" or (direction ~= 1 and direction ~= -1) then
+    error("photos.color_step: 'direction' must be +1 or -1")
+  end
+
+  -- Cycle: "" → red → yellow → green → blue → purple → ""
+  local order = { "", "red", "yellow", "green", "blue", "purple" }
+  local idx_of = {}
+  for i, v in ipairs(order) do idx_of[v] = i end
+
+  local touched = 0
+  cat:withWriteAccessDo("lightroom-py: color step", function()
+    for _, photo in ipairs(photos) do
+      local cur = (photo:getRawMetadata("colorNameForLabel") or ""):lower()
+      local cur_idx = idx_of[cur] or 1
+      local new_idx = ((cur_idx - 1 + direction) % #order) + 1
+      photo:setRawMetadata("colorNameForLabel", order[new_idx])
+      touched = touched + 1
+    end
+  end, { timeout = 30, asynchronous = false })
+  return { touched = touched, missing = missing, direction = direction }
+end
+
 -- ---------- metadata writes ----------
 
 Handlers["metadata.add_keywords"] = function(params)
