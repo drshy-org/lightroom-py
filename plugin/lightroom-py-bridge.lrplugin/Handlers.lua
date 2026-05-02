@@ -229,11 +229,21 @@ Handlers["photos.select_all"] = function(_params)
 end
 
 Handlers["photos.select_none"] = function(_params)
+  -- LR's setSelectedPhotos asserts on nil first arg. The trick is that
+  -- "no selection" in LR means a single anchor photo with NO target
+  -- multiset — i.e., the active photo stays focused but the multi-select
+  -- is empty. Pragmatic approach: pass the current target photo (or any
+  -- photo) as anchor with an empty target list. If there's no target
+  -- photo at all, this is a no-op.
   local cat = LrApplication.activeCatalog()
+  local current = cat:getTargetPhotos() or {}
+  if #current == 0 then return { selected = 0, note = "nothing was selected" } end
+
+  local anchor = current[1]
   cat:withWriteAccessDo("lightroom-py: select none", function()
-    cat:setSelectedPhotos(nil, {})
+    cat:setSelectedPhotos(anchor, { anchor })
   end, { timeout = 5, asynchronous = false })
-  return { selected = 0 }
+  return { selected = 1, note = "kept single anchor (LR has no truly-empty selection)" }
 end
 
 Handlers["photos.select_inverse"] = function(_params)
@@ -248,6 +258,16 @@ Handlers["photos.select_inverse"] = function(_params)
   for _, p in ipairs(all) do
     local uid = p:getRawMetadata("uuid")
     if not in_selection[uid] then table.insert(inverted, p) end
+  end
+
+  -- LR's setSelectedPhotos asserts on nil first arg. If the inverse is
+  -- empty (everything was selected), keep the existing anchor as a
+  -- single-photo selection — same workaround as photos.select_none.
+  if #inverted == 0 then
+    return {
+      selected = 0,
+      note = "everything was already selected; inverse is empty (no-op)",
+    }
   end
 
   cat:withWriteAccessDo("lightroom-py: select inverse", function()
@@ -332,8 +352,12 @@ Handlers["photos.rating_step"] = function(params)
     for _, photo in ipairs(photos) do
       local cur = photo:getRawMetadata("rating") or 0
       local new = math.max(0, math.min(5, cur + delta))
-      -- LR rejects 0; pass nil to clear instead.
-      photo:setRawMetadata("rating", (new == 0) and nil or new)
+      -- LR rejects 0 as a rating; pass nil to clear instead.
+      -- Lua's `cond and nil or x` ternary breaks because `nil` is falsy
+      -- (`true and nil or x` evaluates to x). Use explicit if/else.
+      local rating_to_set
+      if new == 0 then rating_to_set = nil else rating_to_set = new end
+      photo:setRawMetadata("rating", rating_to_set)
       touched = touched + 1
     end
   end, { timeout = 30, asynchronous = false })
@@ -792,17 +816,17 @@ Handlers["develop.curve_get"] = function(params)
   local key = key_map[channel]
   if not key then error("develop.curve_get: invalid channel: " .. tostring(channel)) end
 
+  -- Direct read — no withReadAccessDo wrapper (broke in LR 15.3 with
+  -- "attempt to call a string value", same gap as develop.get_settings).
   local out = {}
-  cat:withReadAccessDo("lightroom-py: get curve", function()
-    for _, photo in ipairs(photos) do
-      local s = photo:getDevelopSettings() or {}
-      out[photo:getRawMetadata("uuid")] = {
-        name = s.ToneCurveName2012,
-        points = s[key] or {},
-        channel = channel,
-      }
-    end
-  end, { timeout = 10 })
+  for _, photo in ipairs(photos) do
+    local s = photo:getDevelopSettings() or {}
+    out[photo:getRawMetadata("uuid")] = {
+      name = s.ToneCurveName2012,
+      points = s[key] or {},
+      channel = channel,
+    }
+  end
   return { curves = out, missing = missing }
 end
 
@@ -870,8 +894,11 @@ Handlers["develop.snapshot_create"] = function(params)
   local created = {}
   cat:withWriteAccessDo("lightroom-py: snapshot create", function()
     for _, photo in ipairs(photos) do
-      -- LrPhoto:createDevelopSnapshot(name [, includeHistory])
-      local ok, snap_or_err = pcall(function() return photo:createDevelopSnapshot(name, true) end)
+      -- LrPhoto:createDevelopSnapshot(name [, includeHistory]) yields internally —
+      -- use LrTasks.pcall (yield-safe), not built-in pcall.
+      local ok, snap_or_err = LrTasks.pcall(function()
+        return photo:createDevelopSnapshot(name, true)
+      end)
       if ok then
         table.insert(created, { uuid = photo:getRawMetadata("uuid"), name = name, ok = true })
       else
@@ -886,19 +913,28 @@ Handlers["develop.snapshot_list"] = function(params)
   local cat = LrApplication.activeCatalog()
   local photos, missing = target_photos(cat, params)
 
+  -- Direct read; no access wrapper (see develop.get_settings note).
+  -- getDevelopSnapshots() returns a list of snapshot tables/objects that
+  -- include name, snapshotID, id_global. Surface the useful fields.
   local out = {}
-  cat:withReadAccessDo("lightroom-py: snapshot list", function()
-    for _, photo in ipairs(photos) do
-      local snaps = {}
-      local ok, list = pcall(function() return photo:getDevelopSnapshots() end)
-      if ok and type(list) == "table" then
-        for _, s in ipairs(list) do
-          table.insert(snaps, { name = s, })
+  for _, photo in ipairs(photos) do
+    local snaps = {}
+    local ok, list = LrTasks.pcall(function() return photo:getDevelopSnapshots() end)
+    if ok and type(list) == "table" then
+      for _, s in ipairs(list) do
+        if type(s) == "string" then
+          table.insert(snaps, { name = s })
+        elseif type(s) == "table" then
+          table.insert(snaps, {
+            name = s.name or "",
+            snapshot_id = s.snapshotID,
+            id_global = s.id_global,
+          })
         end
       end
-      out[photo:getRawMetadata("uuid")] = snaps
     end
-  end, { timeout = 10 })
+    out[photo:getRawMetadata("uuid")] = snaps
+  end
   return { snapshots = out, missing = missing }
 end
 
@@ -910,12 +946,10 @@ Handlers["develop.process_version_get"] = function(params)
   if #photos == 0 then error("develop.process_version_get: no target photo") end
 
   local out = {}
-  cat:withReadAccessDo("lightroom-py: get process version", function()
-    for _, photo in ipairs(photos) do
-      local s = photo:getDevelopSettings() or {}
-      out[photo:getRawMetadata("uuid")] = s.ProcessVersion or "unknown"
-    end
-  end, { timeout = 10 })
+  for _, photo in ipairs(photos) do
+    local s = photo:getDevelopSettings() or {}
+    out[photo:getRawMetadata("uuid")] = s.ProcessVersion or "unknown"
+  end
   return { versions = out, missing = missing }
 end
 
@@ -1095,20 +1129,18 @@ Handlers["develop.mask_list"] = function(params)
   local cat = LrApplication.activeCatalog()
   local photos, missing = target_photos(cat, params)
   local out = {}
-  cat:withReadAccessDo("lightroom-py: mask list", function()
-    for _, photo in ipairs(photos) do
-      local s = photo:getDevelopSettings() or {}
-      local masks = {
-        ai_masks       = (s.MaskGroupBasedCorrections and #s.MaskGroupBasedCorrections) or 0,
-        gradient       = (s.GradientBasedCorrections and #s.GradientBasedCorrections) or 0,
-        circular       = (s.CircularGradientBasedCorrections and #s.CircularGradientBasedCorrections) or 0,
-        paint          = (s.PaintBasedCorrections and #s.PaintBasedCorrections) or 0,
-        retouch_areas  = (s.RetouchAreas and #s.RetouchAreas) or 0,
-        red_eye        = (s.RedEyeInfo and 1) or 0,
-      }
-      out[photo:getRawMetadata("uuid")] = masks
-    end
-  end, { timeout = 10 })
+  for _, photo in ipairs(photos) do
+    local s = photo:getDevelopSettings() or {}
+    local masks = {
+      ai_masks       = (s.MaskGroupBasedCorrections and #s.MaskGroupBasedCorrections) or 0,
+      gradient       = (s.GradientBasedCorrections and #s.GradientBasedCorrections) or 0,
+      circular       = (s.CircularGradientBasedCorrections and #s.CircularGradientBasedCorrections) or 0,
+      paint          = (s.PaintBasedCorrections and #s.PaintBasedCorrections) or 0,
+      retouch_areas  = (s.RetouchAreas and #s.RetouchAreas) or 0,
+      red_eye        = (s.RedEyeInfo and 1) or 0,
+    }
+    out[photo:getRawMetadata("uuid")] = masks
+  end
   return { masks = out, missing = missing }
 end
 

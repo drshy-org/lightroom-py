@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-05-02
+
+Real-LR validation pass for v0.4.0. Caught 5 bugs and fixed all of them via hot-reload (no LR restarts during the validation session itself). Every v0.4 verb now verified working against real LR Classic 15.3.
+
+### Fixed (all caught against real LR; hot-reloaded in place)
+- **`develop.curve_get` "attempt to call a string value"** inside `withReadAccessDo`. Same gap as `develop.get_settings` from v0.3.x — read-only operations don't need the wrapper. Direct read works.
+- **`develop.snapshot_create` "Yielding is not allowed within a C or metamethod call"**. The inner `pcall` around `photo:createDevelopSnapshot` blocked the API's internal yield. Switched to `LrTasks.pcall`.
+- **`develop.snapshot_list` returning the whole snapshot object as the `name` field**. `getDevelopSnapshots()` returns tables with `id_global` / `snapshotID` / `name` fields; we now extract them properly.
+- **`develop.process_version_get` and `develop.mask_list`**: same `withReadAccessDo` issue as `curve_get`. Dropped wrappers.
+- **`photos.rating_step` failing on 0→0 transition with `Invalid rating: 0`**. The Lua ternary trick `(new == 0) and nil or new` evaluates to `new` because `nil` is falsy in `and`-then-`or` short-circuits. Replaced with explicit if/else.
+- **`photos.select_none` and `photos.select_inverse` "assertion failed!"**. LR's `setSelectedPhotos(nil, {})` rejects the nil first arg. Workaround: keep a single anchor photo as the "deselected" state (LR has no truly-empty selection), and short-circuit `select_inverse` when the inverse is empty.
+
+### Validation summary against real LR Classic 15.3
+| Verb group | Status |
+|---|---|
+| `develop curve get/set/preset/linear/s-curve` | ✅ all working; SQLite confirms points land |
+| `develop snapshot create/list` | ✅ |
+| `develop process-version get/set` | ✅ (your test photo reports `ProcessVersion = "15.4"` — interesting LR behaviour) |
+| `develop mask list/clear` | ✅ |
+| `develop paste-settings --subset` | ✅ subset filter works correctly |
+| `develop reset-crop/masking/spot/redeye/transforms` | ✅ |
+| `ai stage-select-subject/sky` | ⚠️ as documented — dispatches but LR likely ignores the keys |
+| `photos find-by-path` | ✅ |
+| `photos list/count` with `--file-format/--path-substring/--color` | ✅ |
+| `photos select / select-extend / select-all / select-none / select-inverse` | ✅ |
+| `photos next / previous` | ✅ |
+| `photos flag-pick / flag-reject / flag-clear` | ✅ |
+| `photos rate-up / rate-down` (incl. 0 boundary) | ✅ |
+| `photos color-cycle [--reverse]` | ✅ |
+
+### Versions
+- `pyproject` 0.4.0 → 0.4.1
+- `__version__` 0.4.0 → 0.4.1
+- bridge server version 0.4.0 → 0.4.1
+- `PLUGIN_VERSION` 0.4.0 → 0.4.1
+- `Info.lua` VERSION unchanged at 0.4.0 (manifest didn't change)
+
 ## [0.4.0] — 2026-05-01
 
 Feature catch-up sprint to close the gap with `znznzna/lightroom-cli` (124 commands). Adds 30 new verbs across develop / photos / mask / ai. Tests: 88 (was 66). Plugin handlers: 50+ (was 36).
