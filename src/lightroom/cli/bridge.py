@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import secrets
 import shutil
 import subprocess
@@ -389,9 +388,7 @@ def uninstall_service() -> None:
     _launchctl("unload", str(plist_path))
     plist_path.unlink()
     console.print(f"[green]Service removed[/green] ({plist_path})")
-    console.print(
-        "[dim]To run the bridge manually, use `lightroom bridge start`.[/dim]"
-    )
+    console.print("[dim]To run the bridge manually, use `lightroom bridge start`.[/dim]")
 
 
 @bridge.command("service-status")
@@ -402,14 +399,14 @@ def service_status() -> None:
 
     plist_path = _service_plist_path()
     if not plist_path.exists():
-        console.print(f"[yellow]Service not installed.[/yellow]")
+        console.print("[yellow]Service not installed.[/yellow]")
         console.print(f"  Plist would be: {plist_path}")
         console.print("[dim]Install with: `lightroom bridge install-service`[/dim]")
         return
 
     result = _launchctl("list", SERVICE_LABEL)
     if result.returncode != 0:
-        console.print(f"[yellow]Service plist exists but is not loaded[/yellow]")
+        console.print("[yellow]Service plist exists but is not loaded[/yellow]")
         console.print(f"  Plist: {plist_path}")
         console.print(f"  Reload: `launchctl load {plist_path}`")
         return

@@ -19,8 +19,10 @@ from .cli import (
     library,
     metadata,
     photos,
-    setup as setup_cmd,
     skill,
+)
+from .cli import (
+    setup as setup_cmd,
 )
 
 logger = logging.getLogger(__name__)

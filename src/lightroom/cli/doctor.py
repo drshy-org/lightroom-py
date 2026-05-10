@@ -130,4 +130,6 @@ def doctor() -> None:
         console.print(f"[bold]Next:[/bold] {next_step}")
     else:
         console.print()
-        console.print("[bold green]All systems go.[/bold green] Try `lightroom photos list --limit 5`.")
+        console.print(
+            "[bold green]All systems go.[/bold green] Try `lightroom photos list --limit 5`."
+        )

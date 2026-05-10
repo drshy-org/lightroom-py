@@ -19,7 +19,6 @@ import secrets
 import shutil
 import subprocess
 import sys
-from pathlib import Path
 
 import click
 from rich.console import Console
@@ -74,7 +73,9 @@ def setup(
     dst.parent.mkdir(parents=True, exist_ok=True)
     if dst.exists():
         if not force:
-            console.print(f"  [yellow]already installed at {dst}[/yellow] (use --force to reinstall)")
+            console.print(
+                f"  [yellow]already installed at {dst}[/yellow] (use --force to reinstall)"
+            )
         else:
             shutil.rmtree(dst)
             shutil.copytree(src, dst)
@@ -116,7 +117,9 @@ def setup(
             plist_path.write_text(bridge_mod._build_plist(cli_path, host, port))
             result = bridge_mod._launchctl("load", str(plist_path))
             if result.returncode == 0:
-                console.print(f"  [green]service running[/green] (label={bridge_mod.SERVICE_LABEL})")
+                console.print(
+                    f"  [green]service running[/green] (label={bridge_mod.SERVICE_LABEL})"
+                )
                 console.print(f"  bridge listening at http://{host}:{port}")
             else:
                 console.print(
