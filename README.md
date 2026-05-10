@@ -98,6 +98,60 @@ lightroom bridge start         # leave running
 
 ---
 
+## Command cheatsheet
+
+Full reference: [docs/cli-reference.md](docs/cli-reference.md). The 20 most common patterns:
+
+```bash
+# === Setup + health ===
+lightroom setup                                              # one-shot: plugin + service + skill
+lightroom doctor                                             # diagnose install + bridge state
+lightroom bridge ping                                        # round-trip test
+
+# === Catalog + cull ===
+lightroom catalog open ~/Pictures/Lightroom/MyCatalog.lrcat
+lightroom photos list --rating ">=4" --iso ">=400" --since 2026-01-01 --json
+lightroom photos count --keyword wedding
+lightroom photos select-all
+lightroom photos flag-pick --selection
+lightroom photos rate-up --selection                         # cycle +1 star
+
+# === Metadata ===
+lightroom metadata add-keywords "wedding,bride,People|Family|Mom" --selection
+lightroom metadata rate 5 --selection
+lightroom metadata set-iptc -f caption="Sunset" -f city="Paris" --selection
+
+# === Global develop ===
+lightroom develop list-presets
+lightroom develop apply-preset "Pop" --folder "Adaptive: Subject" --selection
+lightroom develop apply-settings '{"Exposure2012":0.5,"Contrast2012":20}' --selection
+lightroom develop hsl --saturation orange=10 --luminance blue=15 --selection
+lightroom develop color-grade --shadow-hue 215 --shadow-sat 20 \
+                              --highlight-hue 30 --highlight-sat 25 --selection
+lightroom develop curve preset "Medium Contrast" --selection
+
+# === ⭐ Geometry mask creation (v0.6, verified) ===
+lightroom develop mask create-radial --left 0.05 --right 0.5 \
+    --top 0.4 --bottom 0.95 --exposure 1.0 \
+    --name "subject-brighten" --selection
+lightroom develop mask create-radial --top 0.15 --bottom 0.85 \
+    --left 0.15 --right 0.85 --invert --exposure -1.0 --feather 70 --selection
+    # ↑ vignette-style darkening (invert = effect OUTSIDE the ellipse)
+
+# === Safety + experimentation ===
+lightroom develop snapshot create "Pre-agent-edit" --selection
+lightroom develop mask list --selection                      # see what masks are on the photo
+lightroom develop mask clear --kind all --selection          # wipe all masks
+lightroom develop reset --selection                          # full reset
+
+# === Production export ===
+lightroom library export ~/Desktop/finals --selection --format JPEG \
+    --quality 88 --resize-long-edge 1920 --sharpening standard --dpi 96
+
+# === External tool roundtrip ===
+lightroom edit-in run "magick {input} -auto-level {output}" --selection
+```
+
 ## Three ways to use
 
 ### 1. CLI
