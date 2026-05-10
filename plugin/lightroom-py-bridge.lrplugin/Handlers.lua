@@ -1322,6 +1322,62 @@ Handlers["edit_in.export"] = function(params)
     LR_collisionHandling = "rename",
   }
 
+  -- v0.5: output sharpening + resize + watermark + filename templates.
+  local sharpening = params and params.sharpening
+  if sharpening == "low" or sharpening == "standard" or sharpening == "high" then
+    local level_map = { low = 0, standard = 1, high = 2 }
+    local media_map = { screen = "screen", matte = "matte", glossy = "glossy" }
+    local media = params and params.sharpening_media or "screen"
+    export_settings.LR_outputSharpeningOn    = true
+    export_settings.LR_outputSharpeningLevel = level_map[sharpening]
+    export_settings.LR_outputSharpeningMedia = media_map[media] or "screen"
+  end
+
+  if params and params.resize_long_edge then
+    -- LR's "longEdge" resize uses LR_size_maxHeight as the long edge bound
+    -- and an inverted aspect-ratio test internally. Setting both maxWidth and
+    -- maxHeight to the same value makes longEdge work consistently across
+    -- portrait/landscape orientations.
+    export_settings.LR_size_doConstrain = true
+    export_settings.LR_size_resizeType  = "longEdge"
+    export_settings.LR_size_maxHeight   = params.resize_long_edge
+    export_settings.LR_size_maxWidth    = params.resize_long_edge
+    export_settings.LR_size_units       = "pixels"
+    export_settings.LR_size_doNotEnlarge = true
+  elseif params and (params.resize_max_width or params.resize_max_height) then
+    export_settings.LR_size_doConstrain = true
+    export_settings.LR_size_resizeType  = "wh"
+    export_settings.LR_size_maxWidth    = params.resize_max_width or 99999
+    export_settings.LR_size_maxHeight   = params.resize_max_height or 99999
+    export_settings.LR_size_units       = "pixels"
+    export_settings.LR_size_doNotEnlarge = true
+  end
+
+  if params and params.dpi then
+    export_settings.LR_size_resolution = params.dpi
+    export_settings.LR_size_resolutionUnits = "inch"
+  end
+
+  if params and params.filename_template then
+    export_settings.LR_renamingTokensOn = true
+    export_settings.LR_tokens = params.filename_template
+    export_settings.LR_tokenCustomString = ""
+  end
+
+  if params and params.watermark then
+    export_settings.LR_useWatermark = true
+    if params.watermark_name then
+      -- LR identifies watermarks by their internal id_global.
+      -- watermark_name may be a name or UUID — pass through; if it's a name,
+      -- LR's UI treats it as the display name and looks up by name.
+      export_settings.LR_watermarking_id = params.watermark_name
+    end
+  end
+
+  if params and params.minimize_metadata then
+    export_settings.LR_minimizeEmbeddedMetadata = true
+  end
+
   local session = LrExportSession({
     photosToExport = photos,
     exportSettings = export_settings,

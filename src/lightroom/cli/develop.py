@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json as json_lib
+from typing import Any
 
 import click
 from rich.console import Console
@@ -554,3 +555,265 @@ def paste_settings(
         )
 
     asyncio.run(_go())
+
+
+# ---------- Typed wrappers (v0.5) ----------
+# Pure Python over apply_settings; one Click command per Develop panel.
+
+
+def _parse_kv_pairs(pairs: tuple[str, ...]) -> dict[str, float]:
+    """Parse `key=value` pairs (used for HSL bands, etc.)."""
+    out: dict[str, float] = {}
+    for p in pairs:
+        if "=" not in p:
+            raise click.BadParameter(f"expected key=value, got {p!r}")
+        k, v = p.split("=", 1)
+        try:
+            out[k.strip()] = float(v.strip())
+        except ValueError as exc:
+            raise click.BadParameter(f"value for {k} is not a number: {v!r}") from exc
+    return out
+
+
+def _typed_runner(coro_factory):
+    """Wrap a typed-wrapper call into Click's sync world."""
+    from .. import LightroomClient
+
+    async def _go():
+        async with LightroomClient.connect() as lr:
+            result = await coro_factory(lr)
+        console.print(
+            f"[green]applied[/green] to {result.get('touched', 0)} photo(s)"
+            + (f" (skipped: {result['skipped']})" if result.get("skipped") else "")
+        )
+
+    asyncio.run(_go())
+
+
+@develop.command("crop")
+@click.argument("uuids", nargs=-1)
+@click.option("--selection", is_flag=True)
+@click.option("--top", type=float)
+@click.option("--left", type=float)
+@click.option("--right", type=float)
+@click.option("--bottom", type=float)
+@click.option("--angle", type=float, help="Rotation degrees (positive = clockwise).")
+@click.option("--constrain-to-warp/--no-constrain-to-warp", default=None)
+def crop_cmd(
+    uuids: tuple[str, ...],
+    selection: bool,
+    top: float | None,
+    left: float | None,
+    right: float | None,
+    bottom: float | None,
+    angle: float | None,
+    constrain_to_warp: bool | None,
+) -> None:
+    """Set crop rectangle (0..1) and rotation angle."""
+    photo_uuids = _parse_uuids(uuids, selection)
+    _typed_runner(
+        lambda lr: lr.develop.crop(
+            top=top,
+            left=left,
+            right=right,
+            bottom=bottom,
+            angle=angle,
+            constrain_to_warp=constrain_to_warp,
+            photo_uuids=photo_uuids,
+        )
+    )
+
+
+@develop.command("hsl")
+@click.argument("uuids", nargs=-1)
+@click.option("--selection", is_flag=True)
+@click.option("--hue", "hue_pairs", multiple=True, help="band=value pairs, e.g. --hue red=10")
+@click.option(
+    "--saturation", "sat_pairs", multiple=True, help="band=value, e.g. --saturation orange=-5"
+)
+@click.option(
+    "--luminance", "lum_pairs", multiple=True, help="band=value, e.g. --luminance blue=12"
+)
+def hsl_cmd(
+    uuids: tuple[str, ...],
+    selection: bool,
+    hue_pairs: tuple[str, ...],
+    sat_pairs: tuple[str, ...],
+    lum_pairs: tuple[str, ...],
+) -> None:
+    """Adjust HSL per band (red/orange/yellow/green/aqua/blue/purple/magenta)."""
+    photo_uuids = _parse_uuids(uuids, selection)
+    hue = _parse_kv_pairs(hue_pairs) or None
+    sat = _parse_kv_pairs(sat_pairs) or None
+    lum = _parse_kv_pairs(lum_pairs) or None
+    _typed_runner(
+        lambda lr: lr.develop.hsl(
+            hue=hue,
+            saturation=sat,
+            luminance=lum,
+            photo_uuids=photo_uuids,
+        )
+    )
+
+
+@develop.command("color-grade")
+@click.argument("uuids", nargs=-1)
+@click.option("--selection", is_flag=True)
+@click.option("--shadow-hue", type=float)
+@click.option("--shadow-sat", type=float)
+@click.option("--shadow-lum", type=float)
+@click.option("--midtone-hue", type=float)
+@click.option("--midtone-sat", type=float)
+@click.option("--midtone-lum", type=float)
+@click.option("--highlight-hue", type=float)
+@click.option("--highlight-sat", type=float)
+@click.option("--highlight-lum", type=float)
+@click.option("--global-hue", type=float)
+@click.option("--global-sat", type=float)
+@click.option("--global-lum", type=float)
+@click.option("--blending", type=float)
+@click.option("--balance", type=float)
+def color_grade_cmd(uuids: tuple[str, ...], selection: bool, **kwargs: float | None) -> None:
+    """Adjust 3-way color-grade wheels + global wheel + blending/balance."""
+    photo_uuids = _parse_uuids(uuids, selection)
+    _typed_runner(
+        lambda lr: lr.develop.color_grade(
+            photo_uuids=photo_uuids,
+            **kwargs,
+        )
+    )
+
+
+@develop.command("transform")
+@click.argument("uuids", nargs=-1)
+@click.option("--selection", is_flag=True)
+@click.option("--vertical", type=float)
+@click.option("--horizontal", type=float)
+@click.option("--rotate", type=float, help="Degrees.")
+@click.option("--scale", type=float)
+@click.option("--x-offset", type=float)
+@click.option("--y-offset", type=float)
+@click.option("--aspect", type=float)
+@click.option(
+    "--upright",
+    type=click.Choice(["off", "auto", "level", "vertical", "full"]),
+)
+def transform_cmd(
+    uuids: tuple[str, ...],
+    selection: bool,
+    vertical: float | None,
+    horizontal: float | None,
+    rotate: float | None,
+    scale: float | None,
+    x_offset: float | None,
+    y_offset: float | None,
+    aspect: float | None,
+    upright: str | None,
+) -> None:
+    """Set Transform / Upright values."""
+    photo_uuids = _parse_uuids(uuids, selection)
+    _typed_runner(
+        lambda lr: lr.develop.transform(
+            vertical=vertical,
+            horizontal=horizontal,
+            rotate=rotate,
+            scale=scale,
+            x_offset=x_offset,
+            y_offset=y_offset,
+            aspect=aspect,
+            upright_mode=upright,
+            photo_uuids=photo_uuids,
+        )
+    )
+
+
+@develop.command("lens-correction")
+@click.argument("uuids", nargs=-1)
+@click.option("--selection", is_flag=True)
+@click.option("--enable-profile/--no-enable-profile", default=None)
+@click.option("--distortion-amount", type=float)
+@click.option("--vignetting-amount", type=float)
+@click.option("--chromatic-aberration-scale", type=float)
+@click.option("--remove-chromatic-aberration/--no-remove-chromatic-aberration", default=None)
+@click.option("--auto-lateral-ca/--no-auto-lateral-ca", default=None)
+def lens_correction_cmd(
+    uuids: tuple[str, ...],
+    selection: bool,
+    **kwargs: Any,
+) -> None:
+    """Set Lens Correction panel values."""
+    photo_uuids = _parse_uuids(uuids, selection)
+    _typed_runner(
+        lambda lr: lr.develop.lens_correction(
+            photo_uuids=photo_uuids,
+            **kwargs,
+        )
+    )
+
+
+@develop.command("calibration")
+@click.argument("uuids", nargs=-1)
+@click.option("--selection", is_flag=True)
+@click.option("--profile", "camera_profile", help="Camera profile name (e.g. 'Adobe Color').")
+@click.option("--shadow-tint", type=float)
+@click.option("--red-hue", type=float)
+@click.option("--red-sat", type=float)
+@click.option("--green-hue", type=float)
+@click.option("--green-sat", type=float)
+@click.option("--blue-hue", type=float)
+@click.option("--blue-sat", type=float)
+def calibration_cmd(uuids: tuple[str, ...], selection: bool, **kwargs: Any) -> None:
+    """Set Camera Calibration panel values."""
+    photo_uuids = _parse_uuids(uuids, selection)
+    _typed_runner(
+        lambda lr: lr.develop.calibration(
+            photo_uuids=photo_uuids,
+            **kwargs,
+        )
+    )
+
+
+@develop.command("detail")
+@click.argument("uuids", nargs=-1)
+@click.option("--selection", is_flag=True)
+@click.option("--sharpness", type=float)
+@click.option("--sharpen-radius", type=float)
+@click.option("--sharpen-detail", type=float)
+@click.option("--sharpen-masking", type=float)
+@click.option("--luminance-nr", type=float)
+@click.option("--luminance-detail", type=float)
+@click.option("--luminance-contrast", type=float)
+@click.option("--color-nr", type=float)
+@click.option("--color-detail", type=float)
+@click.option("--color-smoothness", type=float)
+def detail_cmd(uuids: tuple[str, ...], selection: bool, **kwargs: Any) -> None:
+    """Set Detail panel: sharpening + noise reduction."""
+    photo_uuids = _parse_uuids(uuids, selection)
+    _typed_runner(
+        lambda lr: lr.develop.detail(
+            photo_uuids=photo_uuids,
+            **kwargs,
+        )
+    )
+
+
+@develop.command("effects")
+@click.argument("uuids", nargs=-1)
+@click.option("--selection", is_flag=True)
+@click.option("--vignette-amount", type=float)
+@click.option("--vignette-midpoint", type=float)
+@click.option("--vignette-feather", type=float)
+@click.option("--vignette-roundness", type=float)
+@click.option("--vignette-highlight-contrast", type=float)
+@click.option("--grain-amount", type=float)
+@click.option("--grain-size", type=float)
+@click.option("--grain-frequency", type=float)
+def effects_cmd(uuids: tuple[str, ...], selection: bool, **kwargs: Any) -> None:
+    """Set Effects panel: post-crop vignette + grain."""
+    photo_uuids = _parse_uuids(uuids, selection)
+    _typed_runner(
+        lambda lr: lr.develop.effects(
+            photo_uuids=photo_uuids,
+            **kwargs,
+        )
+    )

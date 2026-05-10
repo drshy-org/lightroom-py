@@ -166,6 +166,14 @@ class PhotoRow:
     folder_path: str | None
     camera: str | None
     lens: str | None
+    # EXIF fields (v0.5) — sourced from AgHarvestedExifMetadata
+    iso: int | None = None
+    aperture: float | None = None  # f-stop, e.g. 2.8
+    shutter_speed: str | None = None  # human form, e.g. "1/200" or "2.5"
+    focal_length: float | None = None  # mm
+    has_gps: bool | None = None
+    gps_lat: float | None = None
+    gps_lon: float | None = None
 
 
 def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
@@ -256,6 +264,13 @@ def list_photos(
     file_format: str | None = None,
     path_substring: str | None = None,
     color_label: str | None = None,
+    iso_gte: int | None = None,
+    iso_lte: int | None = None,
+    aperture_gte: float | None = None,
+    aperture_lte: float | None = None,
+    focal_gte: float | None = None,
+    focal_lte: float | None = None,
+    has_gps: bool | None = None,
 ) -> list[PhotoRow]:
     """Filter Adobe_images via SQL; return uniform :class:`PhotoRow`s.
 
@@ -321,6 +336,29 @@ def list_photos(
         )
         params.append(keyword.lower())
 
+    # EXIF range filters (v0.5)
+    exif_filters = (
+        ("isoSpeedRating >= ?", iso_gte),
+        ("isoSpeedRating <= ?", iso_lte),
+        ("aperture >= ?", aperture_gte),
+        ("aperture <= ?", aperture_lte),
+        ("focalLength >= ?", focal_gte),
+        ("focalLength <= ?", focal_lte),
+    )
+    for clause, val in exif_filters:
+        if val is not None:
+            where.append(
+                f"EXISTS (SELECT 1 FROM AgHarvestedExifMetadata e "
+                f"WHERE e.image = img.id_local AND e.{clause})"
+            )
+            params.append(val)
+    if has_gps is not None:
+        where.append(
+            "EXISTS (SELECT 1 FROM AgHarvestedExifMetadata e "
+            "WHERE e.image = img.id_local AND e.hasGPS = ?)"
+        )
+        params.append(1 if has_gps else 0)
+
     where_sql = ("WHERE " + " AND ".join(where)) if where else ""
     limit_sql = f"LIMIT {int(limit)}" if limit else ""
 
@@ -333,10 +371,18 @@ def list_photos(
           img.colorLabels      AS color_label,
           img.fileFormat       AS file_format,
           file.idx_filename    AS filename,
-          folder.pathFromRoot  AS folder_path
+          folder.pathFromRoot  AS folder_path,
+          exif.isoSpeedRating  AS iso,
+          exif.aperture        AS aperture,
+          exif.shutterSpeed    AS shutter_apex,
+          exif.focalLength     AS focal_length,
+          exif.hasGPS          AS has_gps,
+          exif.gpsLatitude     AS gps_lat,
+          exif.gpsLongitude    AS gps_lon
         FROM Adobe_images img
-        LEFT JOIN AgLibraryFile   file   ON file.id_local   = img.rootFile
-        LEFT JOIN AgLibraryFolder folder ON folder.id_local = file.folder
+        LEFT JOIN AgLibraryFile           file   ON file.id_local   = img.rootFile
+        LEFT JOIN AgLibraryFolder         folder ON folder.id_local = file.folder
+        LEFT JOIN AgHarvestedExifMetadata exif   ON exif.image      = img.id_local
         {where_sql}
         ORDER BY img.captureTime DESC
         {limit_sql}
@@ -348,8 +394,8 @@ def list_photos(
             cur = conn.execute(sql, params)
         except sqlite3.OperationalError as exc:
             # Some EXIF tables may not exist on very old / very new catalogs;
-            # retry without those joins by stripping camera/lens filters.
-            logger.warning("photo query failed (%s); retrying without camera/lens filters", exc)
+            # retry without any EXIF-dependent filters.
+            logger.warning("photo query failed (%s); retrying without EXIF filters", exc)
             return list_photos(
                 catalog_path,
                 rating_gte=rating_gte,
@@ -360,6 +406,16 @@ def list_photos(
                 since=since,
                 until=until,
                 limit=limit,
+                file_format=file_format,
+                path_substring=path_substring,
+                color_label=color_label,
+                iso_gte=None,
+                iso_lte=None,
+                aperture_gte=None,
+                aperture_lte=None,
+                focal_gte=None,
+                focal_lte=None,
+                has_gps=None,
             )
         camera_by_id, lens_by_id = _exif_lookup(conn, [r["id_local"] for r in cur.fetchall()])
         # Re-run because we consumed cur above:
@@ -377,9 +433,32 @@ def list_photos(
                     folder_path=row["folder_path"],
                     camera=camera_by_id.get(row["id_local"]),
                     lens=lens_by_id.get(row["id_local"]),
+                    iso=int(row["iso"]) if row["iso"] is not None else None,
+                    aperture=row["aperture"],
+                    shutter_speed=_apex_to_shutter(row["shutter_apex"]),
+                    focal_length=row["focal_length"],
+                    has_gps=bool(row["has_gps"]) if row["has_gps"] is not None else None,
+                    gps_lat=row["gps_lat"],
+                    gps_lon=row["gps_lon"],
                 )
             )
     return out
+
+
+def _apex_to_shutter(apex: float | None) -> str | None:
+    """Convert LR's APEX shutter-speed value to a human-readable string.
+
+    LR stores shutter speed in APEX (Additive system of Photographic EXposure),
+    where actual seconds = 1 / 2**apex. Returns "1/200" for fast speeds,
+    "2.5\"" for slow ones, None if input is None.
+    """
+    if apex is None:
+        return None
+    seconds = 1.0 / (2.0**apex)
+    if seconds >= 1.0:
+        return f'{seconds:.1f}"'
+    denom = 1.0 / seconds
+    return f"1/{int(round(denom))}"
 
 
 def count_photos(

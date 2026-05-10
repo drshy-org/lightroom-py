@@ -25,6 +25,15 @@ class Photo:
     rating: int | None = None
     color_label: str | None = None
     keywords: list[str] = field(default_factory=list)
+    # EXIF fields (v0.5) — populated by SQLite fast-path list().
+    iso: int | None = None
+    aperture: float | None = None
+    shutter_speed: str | None = None
+    focal_length: float | None = None
+    camera: str | None = None
+    lens: str | None = None
+    has_gps: bool | None = None
+    capture_time: str | None = None
 
 
 @dataclass(slots=True)

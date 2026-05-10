@@ -332,3 +332,318 @@ class DevelopAPI:
             "develop.mask_clear",
             {"kind": kind, "uuids": list(photo_uuids or [])},
         )
+
+    # ---------- Typed wrappers (v0.5) ----------
+    # These are pure-Python convenience methods over apply_settings. They
+    # accept typed parameters (None = leave alone), build the Adobe-key
+    # settings dict, and dispatch through the same bridge handler. No new
+    # Lua handlers needed; zero LR-side risk.
+
+    async def crop(
+        self,
+        *,
+        top: float | None = None,
+        left: float | None = None,
+        right: float | None = None,
+        bottom: float | None = None,
+        angle: float | None = None,
+        constrain_to_warp: bool | None = None,
+        photo_uuids: Iterable[str] | None = None,
+    ) -> dict:
+        """Set crop rectangle (0..1 normalised) and rotation angle (degrees).
+
+        ``top``/``left``/``right``/``bottom`` are 0..1 fractions of the photo's
+        post-rotation bounding box. ``angle`` is degrees, positive = clockwise.
+        ``constrain_to_warp`` shrinks the crop to stay inside Upright transforms.
+        """
+        return await self._apply_typed(
+            {
+                "CropTop": top,
+                "CropLeft": left,
+                "CropRight": right,
+                "CropBottom": bottom,
+                "CropAngle": angle,
+                "CropConstrainToWarp": constrain_to_warp,
+            },
+            photo_uuids,
+        )
+
+    async def hsl(
+        self,
+        *,
+        hue: dict[str, float] | None = None,
+        saturation: dict[str, float] | None = None,
+        luminance: dict[str, float] | None = None,
+        photo_uuids: Iterable[str] | None = None,
+    ) -> dict:
+        """Set HSL adjustments per color band.
+
+        Each of ``hue`` / ``saturation`` / ``luminance`` is a dict mapping color
+        band → value (-100..100). Bands: ``red``, ``orange``, ``yellow``,
+        ``green``, ``aqua``, ``blue``, ``purple``, ``magenta``.
+
+        Example: ``hsl(saturation={"red": -10, "orange": 5})``
+        """
+        bands = ("Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta")
+        s: dict[str, Any] = {}
+        for src, prefix in (
+            (hue, "HueAdjustment"),
+            (saturation, "SaturationAdjustment"),
+            (luminance, "LuminanceAdjustment"),
+        ):
+            if not src:
+                continue
+            for band, value in src.items():
+                key = band.title()
+                if key not in bands:
+                    raise ValueError(f"unknown HSL band {band!r}; expected one of {bands}")
+                s[f"{prefix}{key}"] = float(value)
+        return await self._apply_typed(s, photo_uuids)
+
+    async def color_grade(
+        self,
+        *,
+        shadow_hue: float | None = None,
+        shadow_sat: float | None = None,
+        shadow_lum: float | None = None,
+        midtone_hue: float | None = None,
+        midtone_sat: float | None = None,
+        midtone_lum: float | None = None,
+        highlight_hue: float | None = None,
+        highlight_sat: float | None = None,
+        highlight_lum: float | None = None,
+        global_hue: float | None = None,
+        global_sat: float | None = None,
+        global_lum: float | None = None,
+        blending: float | None = None,
+        balance: float | None = None,
+        photo_uuids: Iterable[str] | None = None,
+    ) -> dict:
+        """Set color-grading 3-way wheels + global wheel + blending/balance.
+
+        Hues are 0..360, saturations 0..100, luminance -100..100.
+        Blending 0..100 controls shadow↔highlight overlap.
+        Balance -100..100 shifts the tonal break point.
+
+        LR Classic 15.3 quirk: the new ``ColorGrade*`` schema works for
+        Midtone / Global / all Lum keys, but **Shadow & Highlight Hue/Sat
+        and the Balance slider are still routed through legacy
+        ``SplitToning*`` keys**. This method translates transparently — you
+        don't need to know which is which. Verified empirically against
+        LR 15.3, 2026-05-10.
+        """
+        s: dict[str, Any] = {
+            # New schema — works directly:
+            "ColorGradeMidtoneHue": midtone_hue,
+            "ColorGradeMidtoneSat": midtone_sat,
+            "ColorGradeMidtoneLum": midtone_lum,
+            "ColorGradeShadowLum": shadow_lum,
+            "ColorGradeHighlightLum": highlight_lum,
+            "ColorGradeGlobalHue": global_hue,
+            "ColorGradeGlobalSat": global_sat,
+            "ColorGradeGlobalLum": global_lum,
+            "ColorGradeBlending": blending,
+            # Legacy schema — required for Shadow/Highlight Hue+Sat + Balance:
+            "SplitToningShadowHue": shadow_hue,
+            "SplitToningShadowSaturation": shadow_sat,
+            "SplitToningHighlightHue": highlight_hue,
+            "SplitToningHighlightSaturation": highlight_sat,
+            "SplitToningBalance": balance,
+        }
+        legacy_keys = (
+            "SplitToningShadowHue",
+            "SplitToningShadowSaturation",
+            "SplitToningHighlightHue",
+            "SplitToningHighlightSaturation",
+            "SplitToningBalance",
+        )
+        if any(s.get(k) is not None for k in legacy_keys):
+            s["EnableSplitToning"] = True
+        return await self._apply_typed(s, photo_uuids)
+
+    async def transform(
+        self,
+        *,
+        vertical: float | None = None,
+        horizontal: float | None = None,
+        rotate: float | None = None,
+        scale: float | None = None,
+        x_offset: float | None = None,
+        y_offset: float | None = None,
+        aspect: float | None = None,
+        upright_mode: str | None = None,
+        photo_uuids: Iterable[str] | None = None,
+    ) -> dict:
+        """Set Upright / Transform panel values.
+
+        ``upright_mode``: ``"off"`` | ``"auto"`` | ``"level"`` | ``"vertical"`` | ``"full"``.
+        Other params are -100..100 sliders (rotate is degrees).
+        """
+        upright_map = {"off": 0, "auto": 1, "level": 2, "vertical": 3, "full": 4}
+        upright_value: int | None = None
+        if upright_mode is not None:
+            key = upright_mode.lower()
+            if key not in upright_map:
+                raise ValueError(
+                    f"upright_mode must be one of {list(upright_map)}, got {upright_mode!r}"
+                )
+            upright_value = upright_map[key]
+        return await self._apply_typed(
+            {
+                "PerspectiveVertical": vertical,
+                "PerspectiveHorizontal": horizontal,
+                "PerspectiveRotate": rotate,
+                "PerspectiveScale": scale,
+                "PerspectiveX": x_offset,
+                "PerspectiveY": y_offset,
+                "PerspectiveAspect": aspect,
+                "PerspectiveUpright": upright_value,
+            },
+            photo_uuids,
+        )
+
+    async def lens_correction(
+        self,
+        *,
+        enable_profile: bool | None = None,
+        distortion_amount: float | None = None,
+        vignetting_amount: float | None = None,
+        chromatic_aberration_scale: float | None = None,
+        remove_chromatic_aberration: bool | None = None,
+        auto_lateral_ca: bool | None = None,
+        photo_uuids: Iterable[str] | None = None,
+    ) -> dict:
+        """Set Lens Correction panel values.
+
+        ``enable_profile`` toggles "Enable Profile Corrections". Distortion
+        amount and vignetting amount are 0..100 (percent of profile applied).
+        """
+        return await self._apply_typed(
+            {
+                "LensProfileEnable": (1 if enable_profile else 0)
+                if enable_profile is not None
+                else None,
+                "LensProfileDistortionScale": distortion_amount,
+                "LensProfileVignettingScale": vignetting_amount,
+                "LensProfileChromaticAberrationScale": chromatic_aberration_scale,
+                "RemoveChromaticAberration": remove_chromatic_aberration,
+                "AutoLateralCA": (1 if auto_lateral_ca else 0)
+                if auto_lateral_ca is not None
+                else None,
+            },
+            photo_uuids,
+        )
+
+    async def calibration(
+        self,
+        *,
+        camera_profile: str | None = None,
+        shadow_tint: float | None = None,
+        red_hue: float | None = None,
+        red_sat: float | None = None,
+        green_hue: float | None = None,
+        green_sat: float | None = None,
+        blue_hue: float | None = None,
+        blue_sat: float | None = None,
+        photo_uuids: Iterable[str] | None = None,
+    ) -> dict:
+        """Set Camera Calibration panel values.
+
+        ``camera_profile``: name of the embedded profile (e.g. "Adobe Color",
+        "Adobe Standard", "Camera Neutral"). Hue/sat sliders are -100..100.
+        """
+        return await self._apply_typed(
+            {
+                "CameraProfile": camera_profile,
+                "ShadowTint": shadow_tint,
+                "RedHue": red_hue,
+                "RedSaturation": red_sat,
+                "GreenHue": green_hue,
+                "GreenSaturation": green_sat,
+                "BlueHue": blue_hue,
+                "BlueSaturation": blue_sat,
+            },
+            photo_uuids,
+        )
+
+    async def detail(
+        self,
+        *,
+        sharpness: float | None = None,
+        sharpen_radius: float | None = None,
+        sharpen_detail: float | None = None,
+        sharpen_masking: float | None = None,
+        luminance_nr: float | None = None,
+        luminance_detail: float | None = None,
+        luminance_contrast: float | None = None,
+        color_nr: float | None = None,
+        color_detail: float | None = None,
+        color_smoothness: float | None = None,
+        photo_uuids: Iterable[str] | None = None,
+    ) -> dict:
+        """Set Detail panel values: sharpening + noise reduction.
+
+        Sharpness 0..150, radius 0.5..3.0, detail 0..100, masking 0..100.
+        Luminance/color NR 0..100. All -100..100 ranges follow LR's UI.
+        """
+        return await self._apply_typed(
+            {
+                "Sharpness": sharpness,
+                "SharpenRadius": sharpen_radius,
+                "SharpenDetail": sharpen_detail,
+                "SharpenEdgeMasking": sharpen_masking,
+                "LuminanceSmoothing": luminance_nr,
+                "LuminanceNoiseReductionDetail": luminance_detail,
+                "LuminanceNoiseReductionContrast": luminance_contrast,
+                "ColorNoiseReduction": color_nr,
+                "ColorNoiseReductionDetail": color_detail,
+                "ColorNoiseReductionSmoothness": color_smoothness,
+            },
+            photo_uuids,
+        )
+
+    async def effects(
+        self,
+        *,
+        vignette_amount: float | None = None,
+        vignette_midpoint: float | None = None,
+        vignette_feather: float | None = None,
+        vignette_roundness: float | None = None,
+        vignette_highlight_contrast: float | None = None,
+        grain_amount: float | None = None,
+        grain_size: float | None = None,
+        grain_frequency: float | None = None,
+        photo_uuids: Iterable[str] | None = None,
+    ) -> dict:
+        """Set Effects panel values: post-crop vignette + grain.
+
+        Vignette amount -100..100 (negative darkens). Grain amount 0..100.
+        """
+        return await self._apply_typed(
+            {
+                "PostCropVignetteAmount": vignette_amount,
+                "PostCropVignetteMidpoint": vignette_midpoint,
+                "PostCropVignetteFeather": vignette_feather,
+                "PostCropVignetteRoundness": vignette_roundness,
+                "PostCropVignetteHighlightContrast": vignette_highlight_contrast,
+                "GrainAmount": grain_amount,
+                "GrainSize": grain_size,
+                "GrainFrequency": grain_frequency,
+            },
+            photo_uuids,
+        )
+
+    async def _apply_typed(
+        self,
+        keys: dict[str, Any],
+        photo_uuids: Iterable[str] | None,
+    ) -> dict:
+        """Filter None values, apply via apply_settings.
+
+        Returns a no-op result if no keys were specified (avoids round-tripping
+        an empty settings dict to the bridge).
+        """
+        settings = {k: v for k, v in keys.items() if v is not None}
+        if not settings:
+            return {"touched": 0, "missing": [], "skipped": "no settings"}
+        return await self.apply_settings(settings, photo_uuids=photo_uuids)

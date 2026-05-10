@@ -28,22 +28,66 @@ class LibraryAPI:
         format: str = "TIFF",
         quality: int = 95,
         color_space: str = "AdobeRGB",
+        # v0.5: output sharpening + resize + watermark + file naming
+        sharpening: str | None = None,
+        sharpening_media: str = "screen",
+        resize_long_edge: int | None = None,
+        resize_max_width: int | None = None,
+        resize_max_height: int | None = None,
+        dpi: int | None = None,
+        filename_template: str | None = None,
+        watermark: bool = False,
+        watermark_name: str | None = None,
+        minimize_metadata: bool = False,
     ) -> list[dict]:
-        """Export selected photos.
+        """Export selected photos with full output control.
 
-        Backed by the same Lua handler as :meth:`EditInAPI.export`, just
-        re-exposed under ``library`` for ergonomic mapping with PLAN.md.
+        Args:
+            out_dir: target directory.
+            photo_uuids: which photos (None = current selection).
+            format: ``"TIFF"`` | ``"JPEG"`` | ``"PSD"`` | ``"DNG"`` | ``"ORIGINAL"``.
+            quality: 0..100 (JPEG only).
+            color_space: ``"AdobeRGB"`` | ``"sRGB"`` | ``"ProPhotoRGB"``.
+            sharpening: ``"low"`` | ``"standard"`` | ``"high"`` | ``None`` (off).
+            sharpening_media: ``"screen"`` | ``"matte"`` | ``"glossy"``.
+            resize_long_edge: cap longest edge to N pixels.
+            resize_max_width / resize_max_height: cap dimensions individually.
+            dpi: resolution (default LR's 240).
+            filename_template: LR token string e.g. ``"{{image_name}}_web"``.
+            watermark: turn the watermark on.
+            watermark_name: name (or UUID) of the saved watermark in LR.
+            minimize_metadata: strip non-essential metadata for web/social use.
         """
-        result = await self._core.call(
-            "edit_in.export",
-            {
-                "uuids": list(photo_uuids or []),
-                "out_dir": str(Path(out_dir).expanduser().resolve()),
-                "format": format,
-                "quality": quality,
-                "color_space": color_space,
-            },
-        )
+        params: dict[str, object] = {
+            "uuids": list(photo_uuids or []),
+            "out_dir": str(Path(out_dir).expanduser().resolve()),
+            "format": format,
+            "quality": quality,
+            "color_space": color_space,
+        }
+        if sharpening:
+            valid = {"low", "standard", "high"}
+            if sharpening.lower() not in valid:
+                raise ValueError(f"sharpening must be one of {sorted(valid)}, got {sharpening!r}")
+            params["sharpening"] = sharpening.lower()
+            params["sharpening_media"] = sharpening_media
+        if resize_long_edge is not None:
+            params["resize_long_edge"] = int(resize_long_edge)
+        if resize_max_width is not None:
+            params["resize_max_width"] = int(resize_max_width)
+        if resize_max_height is not None:
+            params["resize_max_height"] = int(resize_max_height)
+        if dpi is not None:
+            params["dpi"] = int(dpi)
+        if filename_template:
+            params["filename_template"] = filename_template
+        if watermark:
+            params["watermark"] = True
+            if watermark_name:
+                params["watermark_name"] = watermark_name
+        if minimize_metadata:
+            params["minimize_metadata"] = True
+        result = await self._core.call("edit_in.export", params)
         return list(result.get("exported") or [])
 
     async def make_virtual_copy(

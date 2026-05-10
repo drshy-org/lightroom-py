@@ -47,6 +47,13 @@ class PhotosAPI:
         file_format: str | None = None,
         path_substring: str | None = None,
         color_label: str | None = None,
+        iso_gte: int | None = None,
+        iso_lte: int | None = None,
+        aperture_gte: float | None = None,
+        aperture_lte: float | None = None,
+        focal_gte: float | None = None,
+        focal_lte: float | None = None,
+        has_gps: bool | None = None,
     ) -> _PhotoList:
         path = self._path()
         rows = sql.list_photos(
@@ -62,6 +69,13 @@ class PhotosAPI:
             file_format=file_format,
             path_substring=path_substring,
             color_label=color_label,
+            iso_gte=iso_gte,
+            iso_lte=iso_lte,
+            aperture_gte=aperture_gte,
+            aperture_lte=aperture_lte,
+            focal_gte=focal_gte,
+            focal_lte=focal_lte,
+            has_gps=has_gps,
         )
         return [
             Photo(
@@ -70,6 +84,14 @@ class PhotosAPI:
                 rating=r.rating,
                 color_label=r.color_label,
                 keywords=[],
+                iso=r.iso,
+                aperture=r.aperture,
+                shutter_speed=r.shutter_speed,
+                focal_length=r.focal_length,
+                camera=r.camera,
+                lens=r.lens,
+                has_gps=r.has_gps,
+                capture_time=r.capture_time,
             )
             for r in rows
         ]

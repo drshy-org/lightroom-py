@@ -37,6 +37,36 @@ def _parse_rating(spec: str | None) -> tuple[int | None, int | None]:
     return val, val
 
 
+_NUMERIC_RANGE_RE = re.compile(r"^\s*(>=|<=|>|<|=)?\s*([\d.]+)\s*$")
+
+
+def _parse_numeric_range(
+    spec: str | None,
+    name: str,
+    *,
+    as_float: bool = False,
+) -> tuple[float | int | None, float | int | None]:
+    """Parse a numeric filter like '>=400' / '=2.8' / '<=8' into (gte, lte)."""
+    if not spec:
+        return None, None
+    m = _NUMERIC_RANGE_RE.match(spec)
+    if not m:
+        raise click.BadParameter(f"could not parse {name} spec: {spec!r}")
+    op = m.group(1) or "="
+    raw = m.group(2)
+    val: float | int = float(raw) if as_float else int(float(raw))
+    if op == ">=":
+        return val, None
+    if op == ">":
+        # int-safe; for floats we leave it as is (callers compare >=)
+        return val, None
+    if op == "<=":
+        return None, val
+    if op == "<":
+        return None, val
+    return val, val
+
+
 @click.group()
 def photos() -> None:
     """Photo-level operations."""
@@ -53,6 +83,10 @@ def photos() -> None:
 @click.option("--file-format", help="LR fileFormat (RAW/JPG/TIFF/PSD/DNG/VIDEO).")
 @click.option("--path-substring", help="Match photos whose absolute path contains this substring.")
 @click.option("--color", help="Filter by color label (red/yellow/green/blue/purple, '' for none).")
+@click.option("--iso", help="ISO range, e.g. '>=400', '<=200', '=800'.")
+@click.option("--aperture", help="Aperture (f-stop) range, e.g. '>=2.8', '<=8'.")
+@click.option("--focal", help="Focal length (mm) range, e.g. '>=85', '<=35'.")
+@click.option("--gps/--no-gps", "has_gps", default=None, help="Filter by GPS presence.")
 @click.option("--json", "as_json", is_flag=True, help="Emit JSON instead of a table.")
 def list_(
     rating: str | None,
@@ -65,12 +99,21 @@ def list_(
     file_format: str | None,
     path_substring: str | None,
     color: str | None,
+    iso: str | None,
+    aperture: str | None,
+    focal: str | None,
+    has_gps: bool | None,
     as_json: bool,
 ) -> None:
     """List photos matching filters (read-only via SQLite)."""
     from .. import LightroomClient
 
     rating_gte, rating_lte = _parse_rating(rating)
+    _iso_gte, _iso_lte = _parse_numeric_range(iso, "iso")
+    aperture_gte, aperture_lte = _parse_numeric_range(aperture, "aperture", as_float=True)
+    focal_gte, focal_lte = _parse_numeric_range(focal, "focal", as_float=True)
+    iso_gte: int | None = int(_iso_gte) if _iso_gte is not None else None
+    iso_lte: int | None = int(_iso_lte) if _iso_lte is not None else None
 
     async def _go() -> None:
         async with LightroomClient.connect(require_bridge=False) as lr:
@@ -87,6 +130,13 @@ def list_(
                     file_format=file_format,
                     path_substring=path_substring,
                     color_label=color,
+                    iso_gte=iso_gte,
+                    iso_lte=iso_lte,
+                    aperture_gte=aperture_gte,
+                    aperture_lte=aperture_lte,
+                    focal_gte=focal_gte,
+                    focal_lte=focal_lte,
+                    has_gps=has_gps,
                 )
             except CatalogError as exc:
                 raise click.ClickException(str(exc)) from exc
@@ -100,6 +150,14 @@ def list_(
                             "filename": r.filename,
                             "rating": r.rating,
                             "color_label": r.color_label,
+                            "camera": r.camera,
+                            "lens": r.lens,
+                            "iso": r.iso,
+                            "aperture": r.aperture,
+                            "shutter_speed": r.shutter_speed,
+                            "focal_length": r.focal_length,
+                            "has_gps": r.has_gps,
+                            "capture_time": r.capture_time,
                         }
                         for r in rows
                     ],

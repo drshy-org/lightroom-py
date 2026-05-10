@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-05-10
+
+Comprehensive **typed Develop API** + **EXIF query layer** + **export production-quality**. Pure agent ergonomics: every common photographer action now has a first-class verb instead of raw Adobe-key dict gymnastics. Two real bugs caught + fixed against LR 15.3 along the way.
+
+### Added — Typed Develop wrappers (8 new verbs over apply_settings)
+- **`develop crop`** — `--top/--left/--right/--bottom/--angle/--constrain-to-warp`
+- **`develop hsl`** — `--hue band=value`, `--saturation band=value`, `--luminance band=value` for the 8 LR HSL bands (red/orange/yellow/green/aqua/blue/purple/magenta)
+- **`develop color-grade`** — full 3-way wheels + global wheel + blending/balance. Transparently routes Shadow/Highlight Hue+Sat through legacy `SplitToning*` keys (LR 15.3 quirk: new `ColorGrade*` schema only accepts those values for Midtone/Global/Lum). Auto-sets `EnableSplitToning=true` when needed.
+- **`develop transform`** — `--vertical/--horizontal/--rotate/--scale/--x-offset/--y-offset/--aspect/--upright`. Upright modes: off/auto/level/vertical/full.
+- **`develop lens-correction`** — `--enable-profile/--distortion-amount/--vignetting-amount/--chromatic-aberration-scale/--remove-chromatic-aberration/--auto-lateral-ca`
+- **`develop calibration`** — `--profile "Adobe Color"/--shadow-tint/--red-hue/--red-sat/--green-hue/--green-sat/--blue-hue/--blue-sat`
+- **`develop detail`** — Detail panel: `--sharpness/--sharpen-radius/--sharpen-detail/--sharpen-masking/--luminance-nr/--luminance-detail/--luminance-contrast/--color-nr/--color-detail/--color-smoothness`
+- **`develop effects`** — Effects panel: post-crop vignette + grain (`--vignette-amount/--vignette-midpoint/--vignette-feather/--vignette-roundness/--vignette-highlight-contrast/--grain-amount/--grain-size/--grain-frequency`)
+
+All 8 are pure Python over `apply_settings` — no new bridge handlers, zero LR-side risk. None=leave alone. Verified end-to-end on real LR 15.3.
+
+### Added — EXIF query expansion (SQLite fast-path, no bridge round-trip)
+- New columns surfaced from `AgHarvestedExifMetadata`: ISO, aperture (f-stop), shutter speed (APEX → human "1/200"), focal length (mm), capture time, GPS lat/lon + has-gps boolean.
+- New `photos list` filters: `--iso ">=400"`, `--aperture "<=2.8"`, `--focal ">=85"`, `--gps/--no-gps`. Range syntax shared with `--rating`.
+- **`Photo` dataclass** extended with `iso`, `aperture`, `shutter_speed`, `focal_length`, `camera`, `lens`, `has_gps`, `capture_time` (camera/lens promoted from EXIF lookup helper). JSON output exposes all.
+- Agents now have full shooting-context awareness without exporting first.
+
+### Added — Production-quality exports
+- `library export` extended with: `--sharpening low|standard|high`, `--sharpening-media screen|matte|glossy`, `--resize-long-edge N`, `--resize-max-width N`, `--resize-max-height N`, `--dpi N`, `--filename-template "{{image_name}}_web"` (LR token format), `--watermark`, `--watermark-name`, `--minimize-metadata`.
+- Resize verified end-to-end: `--resize-long-edge 1920` lands a 1920×1280 JPEG (exact 3:2). DPI verified at 96 vs LR's default 240.
+- Watermark passthrough uses LR's saved-watermark name/UUID. Tested user must have a watermark saved in LR's Edit Watermarks dialog.
+
+### Fixed — two mask bugs caught against real LR 15.3
+- **`develop mask clear --kind ai|all|gradient|circular|paint`** crashed with `bad argument #1 to 'next' (table expected, got string)`. Root cause: handler used `""` as a sentinel to clear correction lists, but LR's `applyDevelopSettings` iterates these values with `next()` expecting a table. Fix: pass empty array `{}`. All 5 kinds now work.
+- **`develop mask list` always reported `red_eye: 1`** even on clean photos. Root cause: handler used `s.RedEyeInfo and 1` (truthiness check), but LR 15.3 always sets `RedEyeInfo` to an empty list `{}` even when no red-eye corrections exist (empty Lua tables are truthy). Fix: count length like other mask types. Clean photos now correctly report `red_eye: 0`.
+
+### Versions
+- `pyproject` 0.4.2 → 0.5.0
+- `__version__` 0.4.2 → 0.5.0
+- bridge server version 0.4.2 → 0.5.0
+- `PLUGIN_VERSION` 0.4.2 → 0.5.0
+- `Info.lua` VERSION 0.4.2 → 0.5.0
+
 ## [0.4.2] — 2026-05-07
 
 Install-UX sprint. Cuts the install flow from 6 steps to 3 user actions and eliminates the manual token paste that was the most-complained-about friction point. No new bridge handlers; pure Python + Lua-side ergonomics. Also adds the empirically-verified AI mask compute path documentation (caught earlier this session).

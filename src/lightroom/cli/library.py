@@ -69,6 +69,28 @@ def list_folders(as_json: bool) -> None:
     help="JPEG quality (ignored for other formats).",
 )
 @click.option("--color-space", default="AdobeRGB", show_default=True)
+@click.option(
+    "--sharpening",
+    type=click.Choice(["low", "standard", "high"]),
+    help="Output sharpening level (omit for off).",
+)
+@click.option(
+    "--sharpening-media",
+    type=click.Choice(["screen", "matte", "glossy"]),
+    default="screen",
+    show_default=True,
+)
+@click.option("--resize-long-edge", type=int, help="Cap longest edge to N pixels.")
+@click.option("--resize-max-width", type=int)
+@click.option("--resize-max-height", type=int)
+@click.option("--dpi", type=int, help="Output resolution (default LR=240).")
+@click.option(
+    "--filename-template",
+    help='LR token template, e.g. "{{image_name}}_web". See LR\'s file-naming docs.',
+)
+@click.option("--watermark", is_flag=True, help="Apply LR's currently-selected watermark.")
+@click.option("--watermark-name", help="Name of a saved watermark in LR (optional).")
+@click.option("--minimize-metadata", is_flag=True, help="Strip non-essential metadata.")
 def export(
     out_dir: str,
     uuids: tuple[str, ...],
@@ -76,6 +98,16 @@ def export(
     fmt: str,
     quality: int,
     color_space: str,
+    sharpening: str | None,
+    sharpening_media: str,
+    resize_long_edge: int | None,
+    resize_max_width: int | None,
+    resize_max_height: int | None,
+    dpi: int | None,
+    filename_template: str | None,
+    watermark: bool,
+    watermark_name: str | None,
+    minimize_metadata: bool,
 ) -> None:
     """Export photos to OUT_DIR (TIFF/JPEG/PSD/DNG/ORIGINAL)."""
     from .. import LightroomClient
@@ -90,6 +122,16 @@ def export(
                 format=fmt,
                 quality=quality,
                 color_space=color_space,
+                sharpening=sharpening,
+                sharpening_media=sharpening_media,
+                resize_long_edge=resize_long_edge,
+                resize_max_width=resize_max_width,
+                resize_max_height=resize_max_height,
+                dpi=dpi,
+                filename_template=filename_template,
+                watermark=watermark,
+                watermark_name=watermark_name,
+                minimize_metadata=minimize_metadata,
             )
         console.print(json_lib.dumps(exported, indent=2, default=str))
 
