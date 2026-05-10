@@ -1124,26 +1124,55 @@ end
 --   that write the keys; LR appears to silently ignore them.
 
 Handlers["develop.mask_list"] = function(params)
-  -- Returns a summary of masks present on each target photo. Doesn't
-  -- include full geometry — use develop.get_settings for the raw payload.
+  -- Returns a summary of masks present on each target photo. Counts masks
+  -- by their `What:` field inside the unified MaskGroupBasedCorrections
+  -- schema (LR 15.3 — legacy CircularGradient/Gradient/PaintBasedCorrections
+  -- keys no longer exist; everything's under MaskGroupBasedCorrections).
+  -- Caught against real LR 15.3, 2026-05-10.
   local cat = LrApplication.activeCatalog()
   local photos, missing = target_photos(cat, params)
   local out = {}
   for _, photo in ipairs(photos) do
     local s = photo:getDevelopSettings() or {}
-    -- LR 15.3 always sets RedEyeInfo to an empty list `{}` even when no
-    -- red-eye corrections exist. Counting length matches behaviour of the
-    -- other mask types and gives accurate `red_eye = 0` for clean photos.
-    -- Caught against real LR 15.3, 2026-05-10.
-    local masks = {
-      ai_masks       = (s.MaskGroupBasedCorrections and #s.MaskGroupBasedCorrections) or 0,
-      gradient       = (s.GradientBasedCorrections and #s.GradientBasedCorrections) or 0,
-      circular       = (s.CircularGradientBasedCorrections and #s.CircularGradientBasedCorrections) or 0,
-      paint          = (s.PaintBasedCorrections and #s.PaintBasedCorrections) or 0,
-      retouch_areas  = (s.RetouchAreas and #s.RetouchAreas) or 0,
-      red_eye        = (s.RedEyeInfo and #s.RedEyeInfo) or 0,
+    local counts = {
+      ai_subject = 0,
+      ai_sky     = 0,
+      ai_other   = 0,
+      circular   = 0,  -- radial gradient
+      gradient   = 0,  -- linear gradient
+      paint      = 0,  -- brush
+      total      = 0,
+      retouch_areas = (s.RetouchAreas and #s.RetouchAreas) or 0,
+      red_eye    = (s.RedEyeInfo and #s.RedEyeInfo) or 0,
     }
-    out[photo:getRawMetadata("uuid")] = masks
+    local groups = s.MaskGroupBasedCorrections or {}
+    for _, group in ipairs(groups) do
+      for _, mask in ipairs(group.CorrectionMasks or {}) do
+        counts.total = counts.total + 1
+        local what = mask.What or ""
+        if what == "Mask/CircularGradient" then
+          counts.circular = counts.circular + 1
+        elseif what == "Mask/Gradient" then
+          counts.gradient = counts.gradient + 1
+        elseif what == "Mask/Paint" then
+          counts.paint = counts.paint + 1
+        elseif what == "Mask/Image" then
+          local sub = mask.MaskSubType
+          if sub == 1 then
+            counts.ai_subject = counts.ai_subject + 1
+          elseif sub == 2 then
+            counts.ai_sky = counts.ai_sky + 1
+          else
+            counts.ai_other = counts.ai_other + 1
+          end
+        else
+          counts.ai_other = counts.ai_other + 1
+        end
+      end
+    end
+    -- Back-compat aliases for callers that used the v0.4.x field names.
+    counts.ai_masks = counts.ai_subject + counts.ai_sky + counts.ai_other
+    out[photo:getRawMetadata("uuid")] = counts
   end
   return { masks = out, missing = missing }
 end
@@ -1182,6 +1211,188 @@ Handlers["develop.mask_clear"] = function(params)
     end
   end, { timeout = 30, asynchronous = false })
   return { touched = touched, missing = missing, kind = kind }
+end
+
+-- ---------- geometry mask creation (v0.6) ----------
+
+-- LR 15.3 stores all masks under MaskGroupBasedCorrections[]. Each group
+-- contains the Local* adjustments and a CorrectionMasks[] list of the
+-- geometric/AI masks composing that correction. Multiple masks per group
+-- = combine with blend modes; one group per "panel correction" is the
+-- common case.
+--
+-- This helper assembles a CorrectionMasks entry from typed params then
+-- wraps it in a Correction group and appends to MaskGroupBasedCorrections.
+-- The append (rather than replace) lets agents stack multiple masks.
+--
+-- Verified empirically against LR 15.3 2026-05-10: synthetic radial
+-- written via raw apply_settings renders correctly (35.44% pixel-diff vs
+-- unmasked baseline, mask localized to specified frame coordinates).
+
+local function _new_uuid()
+  -- Tiny UUID v4 generator using math.random (no LR API for this).
+  -- Quality is fine for in-catalog mask IDs.
+  math.randomseed(os.time() + os.clock() * 1000000)
+  local function hex(n) return string.format("%x", math.random(0, n)) end
+  local s = {}
+  for _ = 1, 8 do s[#s+1] = hex(15) end
+  s[#s+1] = "-"
+  for _ = 1, 4 do s[#s+1] = hex(15) end
+  s[#s+1] = "-4"  -- version 4
+  for _ = 1, 3 do s[#s+1] = hex(15) end
+  s[#s+1] = "-"
+  s[#s+1] = string.format("%x", math.random(8, 11))  -- variant
+  for _ = 1, 3 do s[#s+1] = hex(15) end
+  s[#s+1] = "-"
+  for _ = 1, 12 do s[#s+1] = hex(15) end
+  return string.upper(table.concat(s))
+end
+
+local LOCAL_ADJUSTMENT_KEYS = {
+  exposure       = "LocalExposure2012",
+  contrast       = "LocalContrast2012",
+  highlights     = "LocalHighlights2012",
+  shadows        = "LocalShadows2012",
+  whites         = "LocalWhites2012",
+  blacks         = "LocalBlacks2012",
+  clarity        = "LocalClarity2012",
+  dehaze         = "LocalDehaze",
+  saturation     = "LocalSaturation",
+  hue            = "LocalHue",
+  temperature    = "LocalTemperature",
+  tint           = "LocalTint",
+  sharpness      = "LocalSharpness",
+  texture        = "LocalTexture",
+  luminance_noise = "LocalLuminanceNoise",
+  defringe       = "LocalDefringe",
+  moire          = "LocalMoire",
+  toning_hue     = "LocalToningHue",
+  toning_sat     = "LocalToningSaturation",
+  grain          = "LocalGrain",
+}
+
+local function _build_correction_group(mask_table, adjustments, group_name)
+  local group = {
+    What = "Correction",
+    CorrectionName = group_name or "lightroom-py mask",
+    CorrectionID = _new_uuid(),
+    CorrectionActive = true,
+    CorrectionAmount = 1,
+    CorrectionMasks = { mask_table },
+    -- Initialize all Local* to 0 so the structure matches what LR writes.
+    LocalExposure = 0, LocalExposure2012 = 0,
+    LocalContrast = 0, LocalContrast2012 = 0,
+    LocalBrightness = 0,
+    LocalHighlights2012 = 0, LocalShadows2012 = 0,
+    LocalWhites2012 = 0, LocalBlacks2012 = 0,
+    LocalClarity = 0, LocalClarity2012 = 0,
+    LocalDehaze = 0,
+    LocalSaturation = 0, LocalHue = 0,
+    LocalTemperature = 0, LocalTint = 0,
+    LocalSharpness = 0, LocalTexture = 0,
+    LocalLuminanceNoise = 0, LocalDefringe = 0, LocalMoire = 0,
+    LocalToningHue = 0, LocalToningSaturation = 0,
+    LocalGrain = 0,
+    LocalCurveRefineSaturation = 100,
+  }
+  -- Overlay the user-specified adjustments.
+  for k, v in pairs(adjustments or {}) do
+    local lr_key = LOCAL_ADJUSTMENT_KEYS[k]
+    if lr_key and type(v) == "number" then
+      group[lr_key] = v
+      -- legacy duplicate where one exists
+      if k == "exposure"   then group.LocalExposure = v end
+      if k == "contrast"   then group.LocalContrast = v end
+      if k == "clarity"    then group.LocalClarity  = v end
+    end
+  end
+  return group
+end
+
+Handlers["develop.mask_create_radial"] = function(params)
+  -- Create a radial-gradient (elliptical) mask with adjustments.
+  -- Geometry params are normalized 0..1 frame coordinates. The mask
+  -- ellipse is inscribed in the (Left,Top)..(Right,Bottom) bounding box.
+  local cat = LrApplication.activeCatalog()
+  local photos, missing = target_photos(cat, params)
+  local geom = params.geometry or {}
+
+  local mask = {
+    What         = "Mask/CircularGradient",
+    MaskName     = params.name or "lightroom-py radial",
+    MaskID       = _new_uuid(),
+    MaskActive   = true,
+    MaskValue    = 1,
+    MaskBlendMode = 0,
+    MaskInverted = false,
+    MaskVersion  = 1,
+    Top          = geom.top    or 0.25,
+    Bottom       = geom.bottom or 0.75,
+    Left         = geom.left   or 0.25,
+    Right        = geom.right  or 0.75,
+    Angle        = geom.angle  or 0,
+    Feather      = geom.feather   or 50,
+    Midpoint     = geom.midpoint  or 50,
+    Roundness    = geom.roundness or 0,
+    Flipped      = (params.invert == true),  -- invert: false (default) = effect INSIDE
+    Version      = 2,
+  }
+  local group = _build_correction_group(mask, params.adjustments, params.name)
+
+  local touched = 0
+  cat:withWriteAccessDo("lightroom-py: create radial mask", function()
+    for _, photo in ipairs(photos) do
+      local existing = photo:getDevelopSettings() or {}
+      local groups = existing.MaskGroupBasedCorrections or {}
+      -- Append the new correction group rather than replace.
+      groups[#groups+1] = group
+      photo:applyDevelopSettings({ MaskGroupBasedCorrections = groups })
+      touched = touched + 1
+    end
+  end, { timeout = 30, asynchronous = false })
+  return { touched = touched, missing = missing, mask_id = mask.MaskID, group_id = group.CorrectionID }
+end
+
+Handlers["develop.mask_create_linear"] = function(params)
+  -- Create a linear-gradient mask with adjustments.
+  -- Geometry: two parallel lines via Top/Bottom (or Left/Right) endpoints.
+  -- NOTE: linear gradient schema probed by analogy with radial; not yet
+  -- empirically verified at synthesis time. Real-LR test recommended
+  -- before relying on this for production.
+  local cat = LrApplication.activeCatalog()
+  local photos, missing = target_photos(cat, params)
+  local geom = params.geometry or {}
+
+  local mask = {
+    What         = "Mask/Gradient",
+    MaskName     = params.name or "lightroom-py linear",
+    MaskID       = _new_uuid(),
+    MaskActive   = true,
+    MaskValue    = 1,
+    MaskBlendMode = 0,
+    MaskInverted = false,
+    MaskVersion  = 1,
+    -- Two endpoints define the gradient line; effect interpolates between them.
+    -- (X1,Y1) → (X2,Y2)
+    ZeroX        = geom.zero_x or 0.5,
+    ZeroY        = geom.zero_y or 0.0,
+    FullX        = geom.full_x or 0.5,
+    FullY        = geom.full_y or 0.5,
+    Version      = 2,
+  }
+  local group = _build_correction_group(mask, params.adjustments, params.name)
+
+  local touched = 0
+  cat:withWriteAccessDo("lightroom-py: create linear mask", function()
+    for _, photo in ipairs(photos) do
+      local existing = photo:getDevelopSettings() or {}
+      local groups = existing.MaskGroupBasedCorrections or {}
+      groups[#groups+1] = group
+      photo:applyDevelopSettings({ MaskGroupBasedCorrections = groups })
+      touched = touched + 1
+    end
+  end, { timeout = 30, asynchronous = false })
+  return { touched = touched, missing = missing, mask_id = mask.MaskID, group_id = group.CorrectionID }
 end
 
 -- ---------- AI staging (Phase 5) ----------

@@ -333,6 +333,185 @@ class DevelopAPI:
             {"kind": kind, "uuids": list(photo_uuids or [])},
         )
 
+    # ---------- geometry mask creation (v0.6) ----------
+    #
+    # Verified empirically against real LR Classic 15.3 — synthetic radial
+    # masks written via apply_settings RENDER (35.44% pixel-diff). No AI
+    # compute step needed; pure geometry. See CHANGELOG v0.6.0.
+
+    async def mask_create_radial(
+        self,
+        *,
+        top: float = 0.25,
+        bottom: float = 0.75,
+        left: float = 0.25,
+        right: float = 0.75,
+        angle: float = 0,
+        feather: int = 50,
+        midpoint: int = 50,
+        roundness: int = 0,
+        invert: bool = False,
+        name: str | None = None,
+        photo_uuids: Iterable[str] | None = None,
+        # Local adjustments applied INSIDE the mask (or outside if invert=True).
+        exposure: float | None = None,
+        contrast: float | None = None,
+        highlights: float | None = None,
+        shadows: float | None = None,
+        whites: float | None = None,
+        blacks: float | None = None,
+        clarity: float | None = None,
+        dehaze: float | None = None,
+        saturation: float | None = None,
+        hue: float | None = None,
+        temperature: float | None = None,
+        tint: float | None = None,
+        sharpness: float | None = None,
+        texture: float | None = None,
+        luminance_noise: float | None = None,
+        defringe: float | None = None,
+        moire: float | None = None,
+        toning_hue: float | None = None,
+        toning_sat: float | None = None,
+        grain: float | None = None,
+    ) -> dict:
+        """Create a radial (elliptical) gradient mask with local adjustments.
+
+        Geometry is in normalized 0..1 frame coordinates. The mask ellipse
+        is inscribed in the (left, top)..(right, bottom) bounding box.
+
+        - ``angle``: rotation in degrees (0 = horizontal major axis)
+        - ``feather``: 0..100, soft edge falloff (default 50)
+        - ``midpoint``: 0..100, where peak strength sits along the falloff
+        - ``roundness``: -100..100 (-100 = rectangle, 0 = ellipse, +100 = circle)
+        - ``invert``: False (default) = effect inside the ellipse, True = outside
+
+        Local adjustments use the same -100..100 / -5..5 EV scale as LR's UI.
+        Pass None to leave unset. Any combination is fine — adjust multiple at
+        once for a single mask.
+
+        Multiple ``mask_create_radial`` calls append additional masks (each in
+        its own Correction group); they don't overwrite. Use ``mask_clear`` to
+        wipe.
+        """
+        adjustments = {
+            k: v
+            for k, v in {
+                "exposure": exposure,
+                "contrast": contrast,
+                "highlights": highlights,
+                "shadows": shadows,
+                "whites": whites,
+                "blacks": blacks,
+                "clarity": clarity,
+                "dehaze": dehaze,
+                "saturation": saturation,
+                "hue": hue,
+                "temperature": temperature,
+                "tint": tint,
+                "sharpness": sharpness,
+                "texture": texture,
+                "luminance_noise": luminance_noise,
+                "defringe": defringe,
+                "moire": moire,
+                "toning_hue": toning_hue,
+                "toning_sat": toning_sat,
+                "grain": grain,
+            }.items()
+            if v is not None
+        }
+        return await self._core.call(
+            "develop.mask_create_radial",
+            {
+                "uuids": list(photo_uuids or []),
+                "name": name,
+                "invert": invert,
+                "geometry": {
+                    "top": top,
+                    "bottom": bottom,
+                    "left": left,
+                    "right": right,
+                    "angle": angle,
+                    "feather": feather,
+                    "midpoint": midpoint,
+                    "roundness": roundness,
+                },
+                "adjustments": adjustments,
+            },
+        )
+
+    async def mask_create_linear(
+        self,
+        *,
+        zero_x: float = 0.5,
+        zero_y: float = 0.0,
+        full_x: float = 0.5,
+        full_y: float = 0.5,
+        name: str | None = None,
+        photo_uuids: Iterable[str] | None = None,
+        exposure: float | None = None,
+        contrast: float | None = None,
+        highlights: float | None = None,
+        shadows: float | None = None,
+        whites: float | None = None,
+        blacks: float | None = None,
+        clarity: float | None = None,
+        dehaze: float | None = None,
+        saturation: float | None = None,
+        hue: float | None = None,
+        temperature: float | None = None,
+        tint: float | None = None,
+        sharpness: float | None = None,
+        texture: float | None = None,
+    ) -> dict:
+        """Create a linear-gradient mask with local adjustments.
+
+        Geometry: line from (zero_x, zero_y) to (full_x, full_y), both in
+        normalized 0..1 frame coordinates. Effect ramps from 0 to full
+        strength along the perpendicular to this line.
+
+        Default (zero_y=0, full_y=0.5): top-down gradient covering the upper
+        half of the frame — perfect for a graduated ND on the sky.
+
+        ⚠️ **Schema probed by analogy with radial gradient; not yet empirically
+        verified at synthesis time.** Real-LR test recommended before relying
+        on this for production. Radial creation is verified.
+        """
+        adjustments = {
+            k: v
+            for k, v in {
+                "exposure": exposure,
+                "contrast": contrast,
+                "highlights": highlights,
+                "shadows": shadows,
+                "whites": whites,
+                "blacks": blacks,
+                "clarity": clarity,
+                "dehaze": dehaze,
+                "saturation": saturation,
+                "hue": hue,
+                "temperature": temperature,
+                "tint": tint,
+                "sharpness": sharpness,
+                "texture": texture,
+            }.items()
+            if v is not None
+        }
+        return await self._core.call(
+            "develop.mask_create_linear",
+            {
+                "uuids": list(photo_uuids or []),
+                "name": name,
+                "geometry": {
+                    "zero_x": zero_x,
+                    "zero_y": zero_y,
+                    "full_x": full_x,
+                    "full_y": full_y,
+                },
+                "adjustments": adjustments,
+            },
+        )
+
     # ---------- Typed wrappers (v0.5) ----------
     # These are pure-Python convenience methods over apply_settings. They
     # accept typed parameters (None = leave alone), build the Adobe-key

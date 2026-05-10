@@ -12,7 +12,7 @@ return {
 
   LrToolkitIdentifier = "com.henryshen.lightroom-py-bridge",
   LrPluginName = "lightroom-py bridge",
-  VERSION = { major = 0, minor = 5, revision = 0, build = 0 },
+  VERSION = { major = 0, minor = 6, revision = 0, build = 0 },
 
   LrPluginInfoUrl = "https://github.com/drshy/lightroom-py",
 

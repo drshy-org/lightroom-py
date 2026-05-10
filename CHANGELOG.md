@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-05-10
+
+# 🎯 The geometry mask breakthrough.
+
+Empirically verified against real Lightroom Classic 15.3: **synthetic radial-gradient masks written via raw `apply_settings` RENDER autonomously** — no AI compute step, no Export dialog, no user click. 35.44% pixel-diff vs unmasked baseline, mask localized exactly to specified frame coordinates (96.8% in target quadrant, 1.1% in opposite quadrant with correct feather falloff).
+
+This closes the largest remaining gap in pro-photographer workflow coverage. Portrait, fashion, and landscape pros — who need selective dodge/burn, subject brightening without AI dependency, graduated ND simulation, sky-only color grade — can now drive the local-adjustment side of their work from agents.
+
+### Added
+- **`develop.mask_create_radial`** — Python sub-client + Lua handler + CLI command. Creates a radial-gradient (elliptical) mask with full local adjustment surface. Geometry: `top/bottom/left/right` (normalized 0..1 frame coords), `angle`, `feather`, `midpoint`, `roundness`, `invert`. Adjustments: 20+ Local* keys (exposure, contrast, highlights, shadows, whites, blacks, clarity, dehaze, saturation, hue, temperature, tint, sharpness, texture, luminance_noise, defringe, moire, toning_hue, toning_sat, grain). Multiple calls append additional masks (each in its own correction group).
+- **`develop.mask_create_linear`** — same shape, with `zero_x/zero_y → full_x/full_y` line endpoints. ⚠️ Schema probed by analogy with radial; not yet empirically verified at synthesis time. Radial is the verified path. Linear is best-effort.
+- **CLI**: `lightroom develop mask create-radial --left 0.05 --right 0.5 --top 0.4 --bottom 0.95 --exposure 1.0 --selection` — full per-adjustment flags, defaults give a centered mid-sized ellipse.
+
+### Fixed — mask_list counting was always 0 for geometry masks
+LR Classic 15.3 unifies ALL masks (AI, radial, linear, brush) under `MaskGroupBasedCorrections[]` — the legacy keys `CircularGradientBasedCorrections`, `GradientBasedCorrections`, `PaintBasedCorrections` no longer exist in 15.3 catalogs. Our `mask_list` handler was reading those legacy keys, so it always reported 0 for `circular / gradient / paint`. Now traverses the unified schema and counts by the `What:` field on each CorrectionMask:
+- `Mask/Image` + `MaskSubType: 1` → `ai_subject`
+- `Mask/Image` + `MaskSubType: 2` → `ai_sky`
+- `Mask/Image` other → `ai_other`
+- `Mask/CircularGradient` → `circular`
+- `Mask/Gradient` → `gradient`
+- `Mask/Paint` → `paint`
+
+New `total:` field gives a one-glance mask count. Back-compat `ai_masks:` field preserved as `ai_subject + ai_sky + ai_other`.
+
+### What's now possible for agents
+Selective dodge/burn on subjects, graduated ND on skies, vignette-style darkening (`--invert`), selective HSL/color on regions, background darkening for portraits, eye/teeth selective work (with smaller masks), and **stacking multiple masks** for composite local adjustments. Each call appends a new correction group, so agents can apply 2-3 masks (subject brighten + sky darken + foreground texture-boost) in sequence.
+
+### Schema knowledge gained (documented for future maintenance)
+`/tmp/lr-mask-v6/` contains the empirical proof:
+- Radial mask geometry keys: `Top, Bottom, Left, Right, Angle, Feather, Midpoint, Roundness, Flipped, Version`
+- Correction group adjustment keys: 20+ `Local*` keys parallel to LR's slider names with `2012` suffix on the modern subset
+
+### Versions
+- `pyproject` 0.5.0 → 0.6.0
+- `__version__` 0.5.0 → 0.6.0
+- bridge server version 0.5.0 → 0.6.0
+- `PLUGIN_VERSION` 0.5.0 → 0.6.0
+- `Info.lua` VERSION 0.5.0 → 0.6.0
+
+### What's still NOT covered
+- **Brush mask creation** (`Mask/Paint`): stroke data is in a complex `Dabs:` array; not yet probed.
+- **AI mask compute trigger from `apply_settings`**: still requires LR's Export-dialog "Update affected photos" click (Adobe SDK gap, already documented v0.4.2).
+- **Spot removal create**: Adobe SDK doesn't expose this.
+
 ## [0.5.0] — 2026-05-10
 
 Comprehensive **typed Develop API** + **EXIF query layer** + **export production-quality**. Pure agent ergonomics: every common photographer action now has a first-class verb instead of raw Adobe-key dict gymnastics. Two real bugs caught + fixed against LR 15.3 along the way.

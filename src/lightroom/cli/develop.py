@@ -471,7 +471,9 @@ def reset_transforms(uuids: tuple[str, ...], selection: bool) -> None:
 
 @develop.group("mask")
 def mask() -> None:
-    """Mask read/clear (AI mask creation requires LR's UI; see `lightroom ai`)."""
+    """Mask create / list / clear. Geometry masks (radial, linear) work fully
+    autonomously via apply_settings — no AI compute step needed. AI masks
+    (Subject/Sky) still need the LR UI for the compute trigger."""
 
 
 @mask.command("list")
@@ -512,6 +514,149 @@ def mask_clear(uuids: tuple[str, ...], selection: bool, kind: str) -> None:
         console.print(f"[green]cleared {kind} masks[/green] on {result.get('touched')} photo(s)")
 
     asyncio.run(_go())
+
+
+@mask.command("create-radial")
+@click.argument("uuids", nargs=-1)
+@click.option("--selection", is_flag=True)
+@click.option("--top", type=float, default=0.25, show_default=True)
+@click.option("--bottom", type=float, default=0.75, show_default=True)
+@click.option("--left", type=float, default=0.25, show_default=True)
+@click.option("--right", type=float, default=0.75, show_default=True)
+@click.option("--angle", type=float, default=0, show_default=True, help="Rotation in degrees.")
+@click.option("--feather", type=int, default=50, show_default=True)
+@click.option("--midpoint", type=int, default=50, show_default=True)
+@click.option(
+    "--roundness",
+    type=int,
+    default=0,
+    show_default=True,
+    help="-100 rect, 0 ellipse, +100 circle.",
+)
+@click.option(
+    "--invert/--no-invert",
+    default=False,
+    help="Apply effect OUTSIDE the ellipse (e.g. for vignette-style darkening).",
+)
+@click.option("--name", help="Display name for the mask.")
+# Local adjustments — pass any combination.
+@click.option("--exposure", type=float, help="EV inside the mask (-5..5).")
+@click.option("--contrast", type=float)
+@click.option("--highlights", type=float)
+@click.option("--shadows", type=float)
+@click.option("--whites", type=float)
+@click.option("--blacks", type=float)
+@click.option("--clarity", type=float)
+@click.option("--dehaze", type=float)
+@click.option("--saturation", type=float)
+@click.option("--hue", type=float)
+@click.option("--temperature", type=float)
+@click.option("--tint", type=float)
+@click.option("--sharpness", type=float)
+@click.option("--texture", type=float)
+@click.option("--luminance-noise", type=float)
+@click.option("--defringe", type=float)
+@click.option("--moire", type=float)
+@click.option("--toning-hue", type=float)
+@click.option("--toning-sat", type=float)
+@click.option("--grain", type=float)
+def mask_create_radial(
+    uuids: tuple[str, ...],
+    selection: bool,
+    top: float,
+    bottom: float,
+    left: float,
+    right: float,
+    angle: float,
+    feather: int,
+    midpoint: int,
+    roundness: int,
+    invert: bool,
+    name: str | None,
+    **adjustments: Any,
+) -> None:
+    """Create a radial-gradient mask with local adjustments.
+
+    Geometry is 0..1 frame coordinates. The mask ellipse is inscribed in
+    the (--left,--top)..(--right,--bottom) bounding box.
+
+    Example: brighten subject by +1 stop:
+        lightroom develop mask create-radial --left 0.2 --right 0.6
+        --top 0.3 --bottom 0.8 --exposure 1.0 --selection
+    """
+    photo_uuids = _parse_uuids(uuids, selection)
+    _typed_runner(
+        lambda lr: lr.develop.mask_create_radial(
+            top=top,
+            bottom=bottom,
+            left=left,
+            right=right,
+            angle=angle,
+            feather=feather,
+            midpoint=midpoint,
+            roundness=roundness,
+            invert=invert,
+            name=name,
+            photo_uuids=photo_uuids,
+            **{k: v for k, v in adjustments.items() if v is not None},
+        )
+    )
+
+
+@mask.command("create-linear")
+@click.argument("uuids", nargs=-1)
+@click.option("--selection", is_flag=True)
+@click.option("--zero-x", type=float, default=0.5, show_default=True)
+@click.option("--zero-y", type=float, default=0.0, show_default=True)
+@click.option("--full-x", type=float, default=0.5, show_default=True)
+@click.option("--full-y", type=float, default=0.5, show_default=True)
+@click.option("--name")
+@click.option("--exposure", type=float)
+@click.option("--contrast", type=float)
+@click.option("--highlights", type=float)
+@click.option("--shadows", type=float)
+@click.option("--whites", type=float)
+@click.option("--blacks", type=float)
+@click.option("--clarity", type=float)
+@click.option("--dehaze", type=float)
+@click.option("--saturation", type=float)
+@click.option("--hue", type=float)
+@click.option("--temperature", type=float)
+@click.option("--tint", type=float)
+@click.option("--sharpness", type=float)
+@click.option("--texture", type=float)
+def mask_create_linear(
+    uuids: tuple[str, ...],
+    selection: bool,
+    zero_x: float,
+    zero_y: float,
+    full_x: float,
+    full_y: float,
+    name: str | None,
+    **adjustments: Any,
+) -> None:
+    """Create a linear-gradient mask with local adjustments.
+
+    Geometry: line from (--zero-x,--zero-y) to (--full-x,--full-y) in 0..1
+    coords. Effect ramps from 0 to full strength along the perpendicular.
+
+    Default (zero-y=0, full-y=0.5): top-down gradient covering upper half —
+    classic graduated-ND for sky darkening.
+
+    ⚠️ Linear schema is probed-but-unverified; radial is empirically proven.
+    """
+    photo_uuids = _parse_uuids(uuids, selection)
+    _typed_runner(
+        lambda lr: lr.develop.mask_create_linear(
+            zero_x=zero_x,
+            zero_y=zero_y,
+            full_x=full_x,
+            full_y=full_y,
+            name=name,
+            photo_uuids=photo_uuids,
+            **{k: v for k, v in adjustments.items() if v is not None},
+        )
+    )
 
 
 @develop.command("paste-settings")
