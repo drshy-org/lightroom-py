@@ -181,6 +181,16 @@ def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
     return cur.fetchone() is not None
 
 
+def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    """True if `table.column` exists. Useful for v0.5+ EXIF columns that may
+    be absent on synthetic / very-old test catalogs."""
+    try:
+        cur = conn.execute(f"PRAGMA table_info({table})")
+    except sqlite3.OperationalError:
+        return False
+    return any(r[1] == column for r in cur.fetchall())
+
+
 def _scalar(conn: sqlite3.Connection, sql: str, params: tuple = ()) -> Any:
     cur = conn.execute(sql, params)
     row = cur.fetchone()
@@ -362,65 +372,55 @@ def list_photos(
     where_sql = ("WHERE " + " AND ".join(where)) if where else ""
     limit_sql = f"LIMIT {int(limit)}" if limit else ""
 
-    sql = f"""
-        SELECT
-          img.id_local         AS id_local,
-          img.id_global        AS uuid,
-          img.captureTime      AS capture_time,
-          img.rating           AS rating,
-          img.colorLabels      AS color_label,
-          img.fileFormat       AS file_format,
-          file.idx_filename    AS filename,
-          folder.pathFromRoot  AS folder_path,
-          exif.isoSpeedRating  AS iso,
-          exif.aperture        AS aperture,
-          exif.shutterSpeed    AS shutter_apex,
-          exif.focalLength     AS focal_length,
-          exif.hasGPS          AS has_gps,
-          exif.gpsLatitude     AS gps_lat,
-          exif.gpsLongitude    AS gps_lon
-        FROM Adobe_images img
-        LEFT JOIN AgLibraryFile           file   ON file.id_local   = img.rootFile
-        LEFT JOIN AgLibraryFolder         folder ON folder.id_local = file.folder
-        LEFT JOIN AgHarvestedExifMetadata exif   ON exif.image      = img.id_local
-        {where_sql}
-        ORDER BY img.captureTime DESC
-        {limit_sql}
-    """
-
     out: list[PhotoRow] = []
     with open_catalog(catalog_path) as conn:
-        try:
-            cur = conn.execute(sql, params)
-        except sqlite3.OperationalError as exc:
-            # Some EXIF tables may not exist on very old / very new catalogs;
-            # retry without any EXIF-dependent filters.
-            logger.warning("photo query failed (%s); retrying without EXIF filters", exc)
-            return list_photos(
-                catalog_path,
-                rating_gte=rating_gte,
-                rating_lte=rating_lte,
-                camera=None,
-                lens=None,
-                keyword=keyword,
-                since=since,
-                until=until,
-                limit=limit,
-                file_format=file_format,
-                path_substring=path_substring,
-                color_label=color_label,
-                iso_gte=None,
-                iso_lte=None,
-                aperture_gte=None,
-                aperture_lte=None,
-                focal_gte=None,
-                focal_lte=None,
-                has_gps=None,
-            )
-        camera_by_id, lens_by_id = _exif_lookup(conn, [r["id_local"] for r in cur.fetchall()])
-        # Re-run because we consumed cur above:
+        # Synthetic / very old catalogs may lack the EXIF table OR have it
+        # without the v0.5 columns we want to surface. Probe both to decide
+        # whether to JOIN exif columns into the SELECT.
+        # (Earlier versions used a recursive retry; that broke when the new
+        # v0.5 EXIF SELECT columns failed unconditionally — RecursionError.)
+        has_exif = _table_exists(conn, "AgHarvestedExifMetadata") and _column_exists(
+            conn, "AgHarvestedExifMetadata", "isoSpeedRating"
+        )
+
+        if has_exif:
+            select_extra = """,
+              exif.isoSpeedRating  AS iso,
+              exif.aperture        AS aperture,
+              exif.shutterSpeed    AS shutter_apex,
+              exif.focalLength     AS focal_length,
+              exif.hasGPS          AS has_gps,
+              exif.gpsLatitude     AS gps_lat,
+              exif.gpsLongitude    AS gps_lon"""
+            join_extra = "LEFT JOIN AgHarvestedExifMetadata exif ON exif.image = img.id_local"
+        else:
+            select_extra = ""
+            join_extra = ""
+
+        sql = f"""
+            SELECT
+              img.id_local         AS id_local,
+              img.id_global        AS uuid,
+              img.captureTime      AS capture_time,
+              img.rating           AS rating,
+              img.colorLabels      AS color_label,
+              img.fileFormat       AS file_format,
+              file.idx_filename    AS filename,
+              folder.pathFromRoot  AS folder_path
+              {select_extra}
+            FROM Adobe_images img
+            LEFT JOIN AgLibraryFile   file   ON file.id_local   = img.rootFile
+            LEFT JOIN AgLibraryFolder folder ON folder.id_local = file.folder
+            {join_extra}
+            {where_sql}
+            ORDER BY img.captureTime DESC
+            {limit_sql}
+        """
+
         cur = conn.execute(sql, params)
-        for row in cur:
+        rows = cur.fetchall()
+        camera_by_id, lens_by_id = _exif_lookup(conn, [r["id_local"] for r in rows])
+        for row in rows:
             out.append(
                 PhotoRow(
                     uuid=row["uuid"],
@@ -433,13 +433,15 @@ def list_photos(
                     folder_path=row["folder_path"],
                     camera=camera_by_id.get(row["id_local"]),
                     lens=lens_by_id.get(row["id_local"]),
-                    iso=int(row["iso"]) if row["iso"] is not None else None,
-                    aperture=row["aperture"],
-                    shutter_speed=_apex_to_shutter(row["shutter_apex"]),
-                    focal_length=row["focal_length"],
-                    has_gps=bool(row["has_gps"]) if row["has_gps"] is not None else None,
-                    gps_lat=row["gps_lat"],
-                    gps_lon=row["gps_lon"],
+                    iso=int(row["iso"]) if has_exif and row["iso"] is not None else None,
+                    aperture=row["aperture"] if has_exif else None,
+                    shutter_speed=_apex_to_shutter(row["shutter_apex"]) if has_exif else None,
+                    focal_length=row["focal_length"] if has_exif else None,
+                    has_gps=(
+                        bool(row["has_gps"]) if has_exif and row["has_gps"] is not None else None
+                    ),
+                    gps_lat=row["gps_lat"] if has_exif else None,
+                    gps_lon=row["gps_lon"] if has_exif else None,
                 )
             )
     return out
