@@ -21,8 +21,11 @@ LrFunctionContext.callWithContext("lightroom-py-configure", function(context)
   local prefs = LrPrefs.prefsForPlugin()
 
   -- Try a fresh re-sync first so the dialog reflects what's actually on disk.
-  local synced = BridgeState.sync_into_prefs(prefs)
-  local state_path = BridgeState.bridge_state_path()
+  -- Wrapped in pcall so a BridgeState-side bug doesn't block opening Configure.
+  local sync_ok, synced = pcall(BridgeState.sync_into_prefs, prefs)
+  if not sync_ok then synced = false end
+  local path_ok, state_path = pcall(BridgeState.bridge_state_path)
+  if not path_ok then state_path = "(unavailable)" end
 
   local props = LrBinding.makePropertyTable(context)
   props.bridge_host  = prefs.bridge_host or "127.0.0.1"

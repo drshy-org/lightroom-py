@@ -29,8 +29,21 @@ local function expand_tilde(p)
   return p
 end
 
+-- LR's Lua sandbox does NOT expose os.getenv (caught against real LR 15.3
+-- 2026-05-10 — same class as the v0.4.1 "no package.loaded" / "no setfenv"
+-- gotchas). Wrap in a safe accessor so missing-env-var lookup degrades to
+-- defaults instead of crashing plugin init.
+local function safe_getenv(name)
+  if type(os) ~= "table" or type(os.getenv) ~= "function" then
+    return nil
+  end
+  local ok, val = pcall(os.getenv, name)
+  if ok then return val end
+  return nil
+end
+
 local function lightroom_home()
-  local env = os.getenv("LIGHTROOM_HOME")
+  local env = safe_getenv("LIGHTROOM_HOME")
   if env and env ~= "" then
     return expand_tilde(env)
   end
@@ -38,7 +51,7 @@ local function lightroom_home()
 end
 
 local function active_profile()
-  local p = os.getenv("LIGHTROOM_PROFILE")
+  local p = safe_getenv("LIGHTROOM_PROFILE")
   if p and p ~= "" then return p end
   return "default"
 end

@@ -14,8 +14,10 @@ local BridgeState = require "BridgeState"
 local prefs = LrPrefs.prefsForPlugin()
 
 -- Re-sync from bridge.json right before starting — picks up any token rotation
--- since LR launched.
-local synced = BridgeState.sync_into_prefs(prefs)
+-- since LR launched. Wrapped in pcall so a BridgeState-side bug never blocks
+-- the user from starting the bridge with a manually-configured token.
+local sync_ok, synced = pcall(BridgeState.sync_into_prefs, prefs)
+if not sync_ok then synced = false end
 
 if not prefs.bridge_token or prefs.bridge_token == "" then
   LrDialogs.message(
