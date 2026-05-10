@@ -99,6 +99,6 @@ If the bridge server connection is refused: it's not running. Restart with `ligh
 
 ## See also
 
-- Project plan and architecture: [PLAN.md](https://github.com/drshy/lightroom-py/blob/main/PLAN.md)
+- Project plan and architecture: [PLAN.md](https://github.com/drshy-org/lightroom-py/blob/main/PLAN.md)
 - CLI reference: `lightroom --help`
-- Changelog with field-tested bugs and fixes: [CHANGELOG.md](https://github.com/drshy/lightroom-py/blob/main/CHANGELOG.md)
+- Changelog with field-tested bugs and fixes: [CHANGELOG.md](https://github.com/drshy-org/lightroom-py/blob/main/CHANGELOG.md)

@@ -5,7 +5,7 @@ type: software
 authors:
   - name: drshy
     website: "http://www.drshy.xyz"
-repository-code: "https://github.com/drshy/lightroom-py"
+repository-code: "https://github.com/drshy-org/lightroom-py"
 url: "http://www.drshy.xyz"
 abstract: >-
   Unofficial Python library, CLI, and Claude/Codex agent skill for automating

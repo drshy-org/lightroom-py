@@ -238,7 +238,7 @@ For the developer log: `lightroom bridge tail-log -n 50`.
 ## Development
 
 ```bash
-git clone https://github.com/drshy/lightroom-py.git
+git clone https://github.com/drshy-org/lightroom-py.git
 cd lightroom-py
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[all]"
@@ -266,7 +266,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the ranked backlog, architecture deta
 
 ## Contact
 
-Built by **drshy** — [drshy.xyz](http://www.drshy.xyz). Issues + PRs at [github.com/drshy/lightroom-py](https://github.com/drshy/lightroom-py). If `lightroom-py` saves you time, a star ⭐ is appreciated.
+Built by **drshy** — [drshy.xyz](http://www.drshy.xyz). Issues + PRs at [github.com/drshy-org/lightroom-py](https://github.com/drshy-org/lightroom-py). If `lightroom-py` saves you time, a star ⭐ is appreciated.
 
 ## Citation
 
@@ -274,7 +274,7 @@ If you use `lightroom-py` in research, blog posts, papers, or talks, please cite
 
 **Plain-text / APA:**
 
-> drshy. (2026). *lightroom-py: A Python and Claude agent driver for Adobe Lightroom Classic* (v0.6.0) [Software]. Retrieved from https://github.com/drshy/lightroom-py — http://www.drshy.xyz
+> drshy. (2026). *lightroom-py: A Python and Claude agent driver for Adobe Lightroom Classic* (v0.6.0) [Software]. Retrieved from https://github.com/drshy-org/lightroom-py — http://www.drshy.xyz
 
 **BibTeX:**
 
@@ -282,7 +282,7 @@ If you use `lightroom-py` in research, blog posts, papers, or talks, please cite
 @software{drshy_lightroom_py_2026,
   author       = {drshy},
   title        = {{lightroom-py}: {A} {Python} and {Claude} agent driver for {Adobe} {Lightroom} {Classic}},
-  url          = {https://github.com/drshy/lightroom-py},
+  url          = {https://github.com/drshy-org/lightroom-py},
   version      = {0.6.0},
   date         = {2026-05-10},
   note         = {Author homepage: \url{http://www.drshy.xyz}}

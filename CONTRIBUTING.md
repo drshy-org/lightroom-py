@@ -5,7 +5,7 @@ Thanks for your interest! lightroom-py is a Python + Lua bridge for Adobe Lightr
 ## TL;DR for contributors
 
 ```bash
-git clone https://github.com/drshy/lightroom-py.git
+git clone https://github.com/drshy-org/lightroom-py.git
 cd lightroom-py
 python3 -m venv ~/.lightroom/venv          # NOT under ~/Documents (TCC blocks LaunchAgents there)
 source ~/.lightroom/venv/bin/activate
@@ -185,5 +185,5 @@ By contributing you agree your contributions are licensed under the project's MI
 
 ## Questions?
 
-- File a [GitHub issue](https://github.com/drshy/lightroom-py/issues)
+- File a [GitHub issue](https://github.com/drshy-org/lightroom-py/issues)
 - Contact: [drshy.xyz](http://www.drshy.xyz)

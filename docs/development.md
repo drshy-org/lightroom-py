@@ -1,7 +1,7 @@
 # Development
 
 ```bash
-git clone https://github.com/drshy/lightroom-py
+git clone https://github.com/drshy-org/lightroom-py
 cd lightroom-py
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
