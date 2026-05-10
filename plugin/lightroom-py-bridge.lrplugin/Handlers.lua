@@ -1131,13 +1131,17 @@ Handlers["develop.mask_list"] = function(params)
   local out = {}
   for _, photo in ipairs(photos) do
     local s = photo:getDevelopSettings() or {}
+    -- LR 15.3 always sets RedEyeInfo to an empty list `{}` even when no
+    -- red-eye corrections exist. Counting length matches behaviour of the
+    -- other mask types and gives accurate `red_eye = 0` for clean photos.
+    -- Caught against real LR 15.3, 2026-05-10.
     local masks = {
       ai_masks       = (s.MaskGroupBasedCorrections and #s.MaskGroupBasedCorrections) or 0,
       gradient       = (s.GradientBasedCorrections and #s.GradientBasedCorrections) or 0,
       circular       = (s.CircularGradientBasedCorrections and #s.CircularGradientBasedCorrections) or 0,
       paint          = (s.PaintBasedCorrections and #s.PaintBasedCorrections) or 0,
       retouch_areas  = (s.RetouchAreas and #s.RetouchAreas) or 0,
-      red_eye        = (s.RedEyeInfo and 1) or 0,
+      red_eye        = (s.RedEyeInfo and #s.RedEyeInfo) or 0,
     }
     out[photo:getRawMetadata("uuid")] = masks
   end
@@ -1163,13 +1167,16 @@ Handlers["develop.mask_clear"] = function(params)
     error("develop.mask_clear: invalid 'kind': " .. tostring(kind))
   end
 
+  -- Mask correction keys hold ARRAYS of correction tables in LR's settings.
+  -- To clear, pass an empty array `{}`. The previous "" (empty-string sentinel)
+  -- crashed LR with "bad argument #1 to 'next' (table expected, got string)"
+  -- because LR iterates the value with next() expecting a table.
+  -- Caught against real LR Classic 15.3, 2026-05-10.
   local touched = 0
   cat:withWriteAccessDo("lightroom-py: clear masks", function()
     for _, photo in ipairs(photos) do
       local payload = {}
-      for _, k in ipairs(keys) do payload[k] = nil end
-      -- nil values don't survive the table → set sentinel to clear:
-      for _, k in ipairs(keys) do payload[k] = "" end
+      for _, k in ipairs(keys) do payload[k] = {} end
       photo:applyDevelopSettings(payload)
       touched = touched + 1
     end
