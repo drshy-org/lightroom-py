@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] — 2026-05-07
+
+Install-UX sprint. Cuts the install flow from 6 steps to 3 user actions and eliminates the manual token paste that was the most-complained-about friction point. No new bridge handlers; pure Python + Lua-side ergonomics. Also adds the empirically-verified AI mask compute path documentation (caught earlier this session).
+
+### Added
+- **`lightroom setup`** — one-command installer that runs plugin install + bridge token generation + LaunchAgent install + skill install + opens Lightroom Classic. Reduces first-time install to: `pip install lightroom-py` → `lightroom setup` → enable plugin in LR's Plug-in Manager (the one Adobe-required manual step).
+- **`lightroom bridge install-service`** — installs the bridge server as a macOS LaunchAgent so it auto-starts on login. No more "keep `bridge start` running in a terminal." Plist label `com.lightroom-py.bridge`. Logs to `~/.lightroom/logs/bridge.{out,err}.log`. KeepAlive=true for crash recovery.
+- **`lightroom bridge uninstall-service`** — symmetric removal of the LaunchAgent.
+- **`lightroom bridge service-status`** — show whether the LaunchAgent is loaded + running, with PID.
+- **Plugin-side token auto-load** (`BridgeState.lua`) — the LR plugin now reads `~/.lightroom/profiles/<profile>/bridge.json` directly on every plugin load and every Start, syncing host/port/token into LrPrefs. **Eliminates manual token paste entirely.** Honours `$LIGHTROOM_HOME` and `$LIGHTROOM_PROFILE` for multi-profile setups. bridge.json is now the single source of truth; LrPrefs is a cache.
+- **`Configure...` dialog**: shows whether the token was auto-loaded and where bridge.json was read from. Still allows manual override for non-default setups.
+- **Better `lightroom doctor`**: now reports macOS LaunchAgent status, and prints a numbered "Next:" hint after the table when something needs attention (instead of leaving the user to figure it out).
+
+### Changed
+- `Development Status :: 3 - Alpha` → `4 - Beta`. Seven tagged releases + real-LR validation across LR Classic 15.3 justifies the bump.
+- `StartBridge.lua`: re-syncs from bridge.json before starting (picks up token rotation since LR launched).
+
+### Documented
+- AI mask compute path: confirmed via empirical pixel-diff test that `Adaptive: Subject` preset application via `LrPhoto:applyPreset` triggers LR's "AI Updates Required" dialog on Export. Clicking Export with the auto-checked "Update affected photos" box renders the AI mask into output (20.93% pixel-diff verified). This is the path agents use to drive AI masks; previously memory believed this was a hard Adobe-side blocker. Synthetic AI mask writes via raw `apply_settings` still produce no rendering, but preset-driven flow works end-to-end with one user click per export batch.
+
+### Versions
+- `pyproject` 0.4.1 → 0.4.2
+- `__version__` 0.4.1 → 0.4.2
+- bridge server version 0.4.1 → 0.4.2
+- `PLUGIN_VERSION` 0.4.1 → 0.4.2
+- `Info.lua` VERSION 0.4.0 → 0.4.2
+
+### Migration notes
+- Existing users: re-run `lightroom bridge install --force` to update the plugin, then optionally `lightroom bridge install-service` to switch to the LaunchAgent (no more terminal). Existing token in bridge.json is preserved.
+- Fresh installs: `pip install lightroom-py` then `lightroom setup`. That's it.
+
 ## [0.4.1] — 2026-05-02
 
 Real-LR validation pass for v0.4.0. Caught 5 bugs and fixed all of them via hot-reload (no LR restarts during the validation session itself). Every v0.4 verb now verified working against real LR Classic 15.3.

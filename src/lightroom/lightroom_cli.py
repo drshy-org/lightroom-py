@@ -19,6 +19,7 @@ from .cli import (
     library,
     metadata,
     photos,
+    setup as setup_cmd,
     skill,
 )
 
@@ -41,6 +42,7 @@ def cli(verbose: bool) -> None:
     _configure_logging("DEBUG" if verbose else None)
 
 
+cli.add_command(setup_cmd.setup)
 cli.add_command(doctor.doctor)
 cli.add_command(bridge.bridge)
 cli.add_command(catalog.catalog)

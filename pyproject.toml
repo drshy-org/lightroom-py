@@ -1,6 +1,6 @@
 [project]
 name = "lightroom-py"
-version = "0.4.1"
+version = "0.4.2"
 description = "Unofficial Python library, CLI, and agent skill for automating Adobe Lightroom Classic"
 dynamic = ["readme"]
 requires-python = ">=3.10"
@@ -10,7 +10,7 @@ authors = [
 ]
 keywords = ["lightroom", "adobe", "photography", "automation", "claude", "mcp", "client", "api"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Intended Audience :: End Users/Desktop",
     "License :: OSI Approved :: MIT License",

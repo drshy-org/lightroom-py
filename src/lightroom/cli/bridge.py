@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import secrets
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import click
@@ -18,6 +21,88 @@ from ..paths import lr_modules_dir
 console = Console()
 
 PLUGIN_DIRNAME = "lightroom-py-bridge.lrplugin"
+
+# macOS LaunchAgent label and path. Project-scoped (not author-scoped) so it
+# stays stable if the GitHub URL changes.
+SERVICE_LABEL = "com.lightroom-py.bridge"
+
+
+def _service_plist_path() -> Path:
+    return Path.home() / "Library" / "LaunchAgents" / f"{SERVICE_LABEL}.plist"
+
+
+def _service_log_dir() -> Path:
+    d = Path.home() / ".lightroom" / "logs"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _resolve_lightroom_cli() -> Path:
+    """Locate the absolute path of the `lightroom` CLI for use in a LaunchAgent.
+
+    LaunchAgents don't get a login shell's PATH, so we need an absolute path.
+    Prefer `shutil.which`; fall back to Python's bin dir.
+    """
+    found = shutil.which("lightroom")
+    if found:
+        return Path(found).resolve()
+    # Fallback: same dir as the running interpreter
+    bin_dir = Path(sys.executable).parent
+    candidate = bin_dir / "lightroom"
+    if candidate.exists():
+        return candidate.resolve()
+    raise click.ClickException(
+        "Could not locate the `lightroom` CLI on PATH. "
+        "Make sure you've activated the venv where lightroom-py is installed."
+    )
+
+
+def _build_plist(cli_path: Path, host: str, port: int) -> str:
+    log_dir = _service_log_dir()
+    out_log = log_dir / "bridge.out.log"
+    err_log = log_dir / "bridge.err.log"
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{SERVICE_LABEL}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{cli_path}</string>
+        <string>bridge</string>
+        <string>start</string>
+        <string>--host</string>
+        <string>{host}</string>
+        <string>--port</string>
+        <string>{port}</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>{out_log}</string>
+    <key>StandardErrorPath</key>
+    <string>{err_log}</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>{cli_path.parent}:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+</dict>
+</plist>
+"""
+
+
+def _launchctl(*args: str, check: bool = False) -> subprocess.CompletedProcess:
+    """Run `launchctl <args>` and return the completed process. Never raises."""
+    return subprocess.run(
+        ["launchctl", *args],
+        capture_output=True,
+        text=True,
+        check=check,
+    )
 
 
 def _bundled_plugin_dir() -> Path:
@@ -237,6 +322,115 @@ def tail_log(lines: int) -> None:
     except Exception as exc:  # noqa: BLE001
         console.print(f"[red]tail-log failed:[/red] {exc}")
         raise SystemExit(1) from exc
+
+
+@bridge.command("install-service")
+@click.option("--host", default="127.0.0.1", show_default=True)
+@click.option("--port", type=int, default=8765, show_default=True)
+@click.option("--force", is_flag=True, help="Overwrite an existing service.")
+def install_service(host: str, port: int, force: bool) -> None:
+    """Install the bridge server as a macOS LaunchAgent (auto-starts on login).
+
+    After this, you no longer need to keep `lightroom bridge start` running in
+    a terminal — the bridge runs in the background and starts automatically
+    when you log in.
+
+    Windows is not yet supported; on Windows, run `lightroom bridge start`
+    manually or add it to your Startup folder.
+    """
+    if sys.platform != "darwin":
+        raise click.ClickException(
+            "install-service currently supports macOS only. "
+            "On Windows, use Task Scheduler or the Startup folder."
+        )
+
+    cli_path = _resolve_lightroom_cli()
+    plist_path = _service_plist_path()
+
+    if plist_path.exists() and not force:
+        raise click.ClickException(
+            f"{plist_path} already exists. Re-run with --force to overwrite, "
+            f"or use `lightroom bridge uninstall-service` first."
+        )
+
+    plist_path.parent.mkdir(parents=True, exist_ok=True)
+    plist_path.write_text(_build_plist(cli_path, host, port))
+
+    # Unload any prior version (best-effort), then load the new one.
+    _launchctl("unload", str(plist_path))
+    result = _launchctl("load", str(plist_path))
+    if result.returncode != 0:
+        raise click.ClickException(
+            f"launchctl load failed: {result.stderr.strip() or result.stdout.strip()}"
+        )
+
+    log_dir = _service_log_dir()
+    console.print(f"[green]Service installed[/green] → {plist_path}")
+    console.print(f"  CLI: {cli_path}")
+    console.print(f"  Listening: http://{host}:{port}")
+    console.print(f"  Logs: {log_dir}/bridge.{{out,err}}.log")
+    console.print(
+        "[dim]The bridge now starts automatically on login. "
+        "Check status: `lightroom bridge status` or `lightroom bridge service-status`.[/dim]"
+    )
+
+
+@bridge.command("uninstall-service")
+def uninstall_service() -> None:
+    """Stop and remove the macOS LaunchAgent installed by `install-service`."""
+    if sys.platform != "darwin":
+        raise click.ClickException("uninstall-service currently supports macOS only.")
+
+    plist_path = _service_plist_path()
+    if not plist_path.exists():
+        console.print(f"[yellow]No service installed[/yellow] at {plist_path}")
+        return
+
+    _launchctl("unload", str(plist_path))
+    plist_path.unlink()
+    console.print(f"[green]Service removed[/green] ({plist_path})")
+    console.print(
+        "[dim]To run the bridge manually, use `lightroom bridge start`.[/dim]"
+    )
+
+
+@bridge.command("service-status")
+def service_status() -> None:
+    """Show the macOS LaunchAgent status for the bridge service."""
+    if sys.platform != "darwin":
+        raise click.ClickException("service-status currently supports macOS only.")
+
+    plist_path = _service_plist_path()
+    if not plist_path.exists():
+        console.print(f"[yellow]Service not installed.[/yellow]")
+        console.print(f"  Plist would be: {plist_path}")
+        console.print("[dim]Install with: `lightroom bridge install-service`[/dim]")
+        return
+
+    result = _launchctl("list", SERVICE_LABEL)
+    if result.returncode != 0:
+        console.print(f"[yellow]Service plist exists but is not loaded[/yellow]")
+        console.print(f"  Plist: {plist_path}")
+        console.print(f"  Reload: `launchctl load {plist_path}`")
+        return
+    # `launchctl list <label>` prints a plist-like dict. Extract PID + last exit.
+    body = result.stdout
+    pid = None
+    last_exit = None
+    for line in body.splitlines():
+        line = line.strip().rstrip(";")
+        if line.startswith('"PID" = '):
+            pid = line.split("=", 1)[1].strip()
+        elif line.startswith('"LastExitStatus" = '):
+            last_exit = line.split("=", 1)[1].strip()
+    console.print(f"[green]Service loaded[/green] ({SERVICE_LABEL})")
+    if pid and pid != "0":
+        console.print(f"  Running: PID {pid}")
+    else:
+        console.print(f"  [yellow]Not currently running[/yellow] (last exit: {last_exit})")
+    console.print(f"  Plist: {plist_path}")
+    log_dir = _service_log_dir()
+    console.print(f"  Logs:  {log_dir}/bridge.{{out,err}}.log")
 
 
 @bridge.command("handlers")

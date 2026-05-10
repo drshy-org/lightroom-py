@@ -1,6 +1,12 @@
 --[[
   Library menu: "lightroom-py: Configure..."
-  Lets the user set host / port / token without editing prefs by hand.
+
+  In v0.4.2+ the token is auto-loaded from
+  ~/.lightroom/profiles/default/bridge.json on every plugin load and every
+  Start, so most users never need to open this dialog. It's still here for:
+    - Manual override (custom host/port for a remote bridge)
+    - Inspecting current values
+    - Forcing a re-sync from bridge.json
 ]]
 
 local LrDialogs   = import "LrDialogs"
@@ -9,14 +15,29 @@ local LrView      = import "LrView"
 local LrFunctionContext = import "LrFunctionContext"
 local LrBinding   = import "LrBinding"
 
+local BridgeState = require "BridgeState"
+
 LrFunctionContext.callWithContext("lightroom-py-configure", function(context)
   local prefs = LrPrefs.prefsForPlugin()
+
+  -- Try a fresh re-sync first so the dialog reflects what's actually on disk.
+  local synced = BridgeState.sync_into_prefs(prefs)
+  local state_path = BridgeState.bridge_state_path()
+
   local props = LrBinding.makePropertyTable(context)
   props.bridge_host  = prefs.bridge_host or "127.0.0.1"
   props.bridge_port  = tostring(prefs.bridge_port or 8765)
   props.bridge_token = prefs.bridge_token or ""
 
   local f = LrView.osFactory()
+  local hint
+  if synced then
+    hint = "✓ Auto-loaded from " .. state_path
+  else
+    hint = "bridge.json not found at " .. state_path ..
+           "\nRun `lightroom bridge start` to create it."
+  end
+
   local contents = f:column {
     bind_to_object = props,
     spacing = f:control_spacing(),
@@ -27,8 +48,10 @@ LrFunctionContext.callWithContext("lightroom-py-configure", function(context)
     f:row { f:static_text { title = "Token:", width = 60 },
             f:edit_field { value = LrView.bind("bridge_token"), width_in_chars = 40 } },
     f:static_text {
-      title = "Find your token in ~/.lightroom/profiles/default/bridge.json",
+      title = hint,
       text_color = import("LrColor")(0.4, 0.4, 0.4),
+      width_in_chars = 70,
+      height_in_lines = 2,
     },
   }
 

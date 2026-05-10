@@ -46,7 +46,7 @@ end
 local logger = LrLogger("lightroom-py")
 logger:enable("logfile")
 
-local PLUGIN_VERSION = "0.4.1"
+local PLUGIN_VERSION = "0.4.2"
 
 local M = {}
 
