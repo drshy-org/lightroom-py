@@ -214,6 +214,29 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the ranked backlog, architecture deta
 
 Built by **drshy** — [drshy.xyz](http://www.drshy.xyz). Issues + PRs at [github.com/drshy/lightroom-py](https://github.com/drshy/lightroom-py). If `lightroom-py` saves you time, a star ⭐ is appreciated.
 
+## Citation
+
+If you use `lightroom-py` in research, blog posts, papers, or talks, please cite it. GitHub auto-detects [CITATION.cff](CITATION.cff) and shows a "Cite this repository" button on the right sidebar.
+
+**Plain-text / APA:**
+
+> drshy. (2026). *lightroom-py: A Python and Claude agent driver for Adobe Lightroom Classic* (v0.6.0) [Software]. Retrieved from https://github.com/drshy/lightroom-py — http://www.drshy.xyz
+
+**BibTeX:**
+
+```bibtex
+@software{drshy_lightroom_py_2026,
+  author       = {drshy},
+  title        = {{lightroom-py}: {A} {Python} and {Claude} agent driver for {Adobe} {Lightroom} {Classic}},
+  url          = {https://github.com/drshy/lightroom-py},
+  version      = {0.6.0},
+  date         = {2026-05-10},
+  note         = {Author homepage: \url{http://www.drshy.xyz}}
+}
+```
+
+If your work uses one of the specific empirical results from this project (the verified geometry mask creation pixel-diff, the AI mask compute path, the LR Classic 15.3 sandbox gotchas catalog), please link to the relevant [CHANGELOG.md](CHANGELOG.md) version entry so readers can find the original evidence.
+
 ## License
 
 MIT — see [LICENSE](LICENSE). Use freely; no warranty; not affiliated with Adobe.

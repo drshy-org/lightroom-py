@@ -1,0 +1,33 @@
+cff-version: 1.2.0
+title: "lightroom-py: A Python and Claude agent driver for Adobe Lightroom Classic"
+message: "If you use this software, please cite it using the metadata in this file."
+type: software
+authors:
+  - name: drshy
+    website: "http://www.drshy.xyz"
+repository-code: "https://github.com/drshy/lightroom-py"
+url: "http://www.drshy.xyz"
+abstract: >-
+  Unofficial Python library, CLI, and Claude/Codex agent skill for automating
+  Adobe Lightroom Classic. First open agent driver with verified programmatic
+  geometry mask creation (Mask/CircularGradient via apply_settings, 35.4%
+  pixel-diff confirmed against LR Classic 15.3) and the empirically documented
+  AI mask compute path via Adaptive preset + Export dialog. Architecturally a
+  Lua plugin polling a local aiohttp server, exposing 62 bridge handlers + 80
+  CLI verbs as Python async client, Click CLI, MCP server, and Claude agent
+  skill.
+keywords:
+  - lightroom
+  - lightroom-classic
+  - adobe
+  - photography
+  - automation
+  - claude
+  - mcp
+  - agent
+  - ai
+  - photo-editing
+  - raw
+license: MIT
+version: 0.6.0
+date-released: "2026-05-10"
