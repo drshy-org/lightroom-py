@@ -14,7 +14,7 @@ return {
   LrPluginName = "lightroom-py bridge",
   VERSION = { major = 0, minor = 4, revision = 2, build = 0 },
 
-  LrPluginInfoUrl = "https://github.com/henryshen/lightroom-py",
+  LrPluginInfoUrl = "https://github.com/drshy/lightroom-py",
 
   LrInitPlugin = "LightroomBridge.lua",
 
