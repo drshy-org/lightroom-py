@@ -109,23 +109,35 @@ def setup(
             cli_path = bridge_mod._resolve_lightroom_cli()
         except click.ClickException as exc:
             console.print(f"  [yellow]could not install service:[/yellow] {exc.message}")
-        else:
-            plist_path = bridge_mod._service_plist_path()
-            plist_path.parent.mkdir(parents=True, exist_ok=True)
-            if plist_path.exists():
-                bridge_mod._launchctl("unload", str(plist_path))
-            plist_path.write_text(bridge_mod._build_plist(cli_path, host, port))
-            result = bridge_mod._launchctl("load", str(plist_path))
-            if result.returncode == 0:
+            cli_path = None
+
+        if cli_path is not None:
+            protected = bridge_mod._is_tcc_protected(cli_path)
+            if protected:
                 console.print(
-                    f"  [green]service running[/green] (label={bridge_mod.SERVICE_LABEL})"
+                    f"  [yellow]skipped LaunchAgent[/yellow]: CLI is at {cli_path}\n"
+                    f"  macOS TCC blocks LaunchAgents from reading files under ~/{protected}.\n"
+                    f"  To enable auto-start: reinstall lightroom-py in ~/.lightroom/venv "
+                    f"or with `pip install --user`, then re-run `lightroom bridge install-service`.\n"
+                    f"  For now, run `lightroom bridge start` in a terminal."
                 )
-                console.print(f"  bridge listening at http://{host}:{port}")
             else:
-                console.print(
-                    f"  [yellow]launchctl load returned {result.returncode}[/yellow]: "
-                    f"{result.stderr.strip()}"
-                )
+                plist_path = bridge_mod._service_plist_path()
+                plist_path.parent.mkdir(parents=True, exist_ok=True)
+                if plist_path.exists():
+                    bridge_mod._launchctl("unload", str(plist_path))
+                plist_path.write_text(bridge_mod._build_plist(cli_path, host, port))
+                result = bridge_mod._launchctl("load", str(plist_path))
+                if result.returncode == 0:
+                    console.print(
+                        f"  [green]service running[/green] (label={bridge_mod.SERVICE_LABEL})"
+                    )
+                    console.print(f"  bridge listening at http://{host}:{port}")
+                else:
+                    console.print(
+                        f"  [yellow]launchctl load returned {result.returncode}[/yellow]: "
+                        f"{result.stderr.strip()}"
+                    )
 
     # 4. Install the agent skill
     if no_skill:

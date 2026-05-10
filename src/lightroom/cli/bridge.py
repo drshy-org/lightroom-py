@@ -36,6 +36,39 @@ def _service_log_dir() -> Path:
     return d
 
 
+# macOS TCC-protected directories. LaunchAgents run in a sandboxed context
+# without Full Disk Access, so they cannot read files inside these paths.
+# A venv (or wheel) sitting under any of these will silently fail at startup
+# with PermissionError on .venv/pyvenv.cfg.
+#
+# Caught by E2E test 2026-05-07: install-service installed cleanly but the
+# spawned bridge could not read its own pyvenv.cfg, exited 256, KeepAlive
+# restarted it forever. Now refuse to install with a clear error instead.
+TCC_PROTECTED_DIRS = (
+    "Documents",
+    "Desktop",
+    "Downloads",
+    "Pictures",
+    "Movies",
+    "Music",
+)
+
+
+def _is_tcc_protected(path: Path) -> str | None:
+    """Return the offending top-level dir name if `path` is under a TCC-protected
+    location (macOS only), else None."""
+    if sys.platform != "darwin":
+        return None
+    try:
+        rel = path.resolve().relative_to(Path.home())
+    except ValueError:
+        return None
+    if not rel.parts:
+        return None
+    top = rel.parts[0]
+    return top if top in TCC_PROTECTED_DIRS else None
+
+
 def _resolve_lightroom_cli() -> Path:
     """Locate the absolute path of the `lightroom` CLI for use in a LaunchAgent.
 
@@ -344,6 +377,29 @@ def install_service(host: str, port: int, force: bool) -> None:
         )
 
     cli_path = _resolve_lightroom_cli()
+
+    # Refuse to install if the venv lives under a TCC-protected directory.
+    # The LaunchAgent would silently fail with PermissionError on pyvenv.cfg
+    # and KeepAlive=true would loop forever. Better to fail loudly here.
+    protected = _is_tcc_protected(cli_path)
+    if protected:
+        raise click.ClickException(
+            f"Cannot install LaunchAgent: lightroom CLI is at {cli_path}\n"
+            f"  This path is under ~/{protected}, which macOS TCC blocks LaunchAgents from reading.\n"
+            f"\n"
+            f"  Workarounds (any one):\n"
+            f"    1. Reinstall lightroom-py into a venv outside protected dirs.\n"
+            f"       Example:\n"
+            f"         python3 -m venv ~/.lightroom/venv\n"
+            f"         ~/.lightroom/venv/bin/pip install lightroom-py\n"
+            f"         ~/.lightroom/venv/bin/lightroom bridge install-service\n"
+            f"    2. Install with `pip install --user lightroom-py` (uses ~/.local/, allowed).\n"
+            f"    3. Skip the LaunchAgent and run `lightroom bridge start` manually.\n"
+            f"\n"
+            f"  Why: macOS protects {', '.join('~/' + d for d in TCC_PROTECTED_DIRS)} "
+            f"from launchd-spawned processes without Full Disk Access."
+        )
+
     plist_path = _service_plist_path()
 
     if plist_path.exists() and not force:

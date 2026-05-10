@@ -37,6 +37,7 @@ Install-UX sprint. Cuts the install flow from 6 steps to 3 user actions and elim
 ### Migration notes
 - Existing users: re-run `lightroom bridge install --force` to update the plugin, then optionally `lightroom bridge install-service` to switch to the LaunchAgent (no more terminal). Existing token in bridge.json is preserved.
 - Fresh installs: `pip install lightroom-py` then `lightroom setup`. That's it.
+- **macOS TCC gotcha**: LaunchAgents cannot read files under `~/Documents`, `~/Desktop`, `~/Downloads`, `~/Pictures`, `~/Movies`, or `~/Music` without Full Disk Access. If your venv lives in one of these, `bridge install-service` (and `setup`) will detect this, refuse to install the LaunchAgent, and tell you the workarounds: install lightroom-py in `~/.lightroom/venv`, use `pip install --user`, or run `lightroom bridge start` manually. Caught and fixed via E2E test pre-launch.
 
 ## [0.4.1] — 2026-05-02
 

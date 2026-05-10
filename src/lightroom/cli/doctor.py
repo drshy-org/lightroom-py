@@ -40,13 +40,25 @@ def _service_status_line() -> str:
     if result.returncode != 0:
         return f"[yellow]plist exists but not loaded[/yellow] (`launchctl load {plist}`)"
     pid = None
+    last_exit = None
     for line in result.stdout.splitlines():
         line = line.strip().rstrip(";")
         if line.startswith('"PID" = '):
             pid = line.split("=", 1)[1].strip()
+        elif line.startswith('"LastExitStatus" = '):
+            last_exit = line.split("=", 1)[1].strip()
     if pid and pid != "0":
         return f"[green]running[/green] (PID {pid})"
-    return "[yellow]loaded but not currently running[/yellow]"
+    # Service loaded but no PID — likely TCC sandbox is killing it.
+    # Specifically: exit 256 + plist points to a venv under ~/Documents et al.
+    hint = ""
+    if last_exit == "256":
+        hint = (
+            " — likely macOS TCC blocking the venv path. "
+            "Reinstall lightroom-py outside ~/Documents/~/Desktop/etc., or "
+            "uninstall the service: `lightroom bridge uninstall-service`"
+        )
+    return f"[yellow]loaded but not currently running[/yellow]{hint}"
 
 
 @click.command()
