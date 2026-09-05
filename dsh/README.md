@@ -8,22 +8,20 @@ all against the Lightroom Classic running on **your own machine**. No cloud, no 
 ## Install
 
 ```bash
-pip install lightroom-py                                   # Python side: server + Lightroom plugin installer
-lightroom bridge install                                   # one-time: installs the Lightroom plugin
-dsh plugin add github:drshy-org/lightroom-py           # this bundle — pure config, no build step
+pip install "lightroom-py[mcp]"                    # 0.6.1+ (on 0.6.0 append "mcp<2" — the extra was unpinned)
+lightroom setup                                    # installs the Lightroom plugin, a login service for the bridge, the skill; opens LR
+dsh plugin add github:drshy-org/lightroom-py       # this bundle — pure config, no build step
 ```
+
+One-time Adobe requirement after `lightroom setup`: enable the plugin in Lightroom's
+**File → Plug-in Manager** (Adobe's sandbox needs a human click there). Then, each time
+Lightroom launches: **Library → Plug-in Extras → lightroom-py: Start bridge** — Lightroom
+initialises plugins lazily, so this click is what starts the poll loop. Start `dsh web`;
+the tools appear as `mcp__lightroom_py__*`.
 
 Pin a commit if you prefer (`github:drshy-org/lightroom-py#<sha>`). `dsh plugin` needs
-`pnpm` on PATH for external packages (`npm i -g pnpm`).
-
-Then start the bridge and open Lightroom Classic:
-
-```bash
-lightroom bridge start
-```
-
-In Lightroom: **Library → Plug-in Extras → lightroom-py: Start bridge**. Start `dsh web`;
-the tools appear as `mcp__lightroom_py__*`.
+`pnpm` on PATH for external packages (`npm i -g pnpm`). Without the login service
+(`lightroom setup --no-service`), run `lightroom bridge start` yourself.
 
 ## What the agent can do
 

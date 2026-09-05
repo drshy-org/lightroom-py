@@ -1,6 +1,6 @@
 [project]
 name = "lightroom-py"
-version = "0.6.0"
+version = "0.6.1"
 description = "Unofficial Python library, CLI, and agent skill for automating Adobe Lightroom Classic"
 dynamic = ["readme"]
 requires-python = ">=3.10"
@@ -36,7 +36,9 @@ Issues = "https://github.com/drshy-org/lightroom-py/issues"
 
 [project.optional-dependencies]
 exiftool = ["pyexiftool>=0.5.0"]
-mcp = ["mcp>=1.0.0"]
+# mcp 2.x renamed FastMCP and removed the low-level Server decorators the
+# server is written against; unpinned installs crashed at startup (2026-09).
+mcp = ["mcp>=1.0.0,<2"]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 0.6.1 — Fixed: `[mcp]` extra installed a server that crashed on startup (2026-09)
+
+`mcp>=1.0.0` was unpinned; `mcp` 2.x (released after 0.6.0) renamed
+`FastMCP` and removed the low-level `Server` decorators `mcp_server.py`
+uses, so every fresh `pip install "lightroom-py[mcp]"` produced a
+`lightroom-mcp` that died with `AttributeError: 'Server' object has no
+attribute 'list_tools'` — silently, in MCP clients that tolerate startup
+failures (DeepSeek Harness, Claude Desktop). Pinned `mcp>=1.0.0,<2` and
+added `tests/test_mcp_server_boot.py`, which boots the server and requires
+a real `initialize` reply, so this class of drift fails CI instead of the
+user. Found by walking the fresh-user install path of the dsh bundle.
+
 ### DeepSeek Harness (dsh) plugin bundle (2026-09)
 
 The repository root now doubles as a dsh bundle (`package.json` with

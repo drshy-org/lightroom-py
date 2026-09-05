@@ -198,7 +198,7 @@ For Claude Desktop's MCP integration: `pip install "lightroom-py[mcp]"` + point 
 This repository is also a [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) plugin bundle (`package.json` + `cordis.patch.yml` at the root — pure configuration, no build step):
 
 ```bash
-pip install "lightroom-py[mcp]"                        # the MCP server
+pip install "lightroom-py[mcp]"                        # the MCP server (0.6.1+; on 0.6.0 add "mcp<2")
 dsh plugin add github:drshy-org/lightroom-py           # the bundle; tools appear as mcp__lightroom_py__*
 ```
 
