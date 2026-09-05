@@ -1,0 +1,31 @@
+{
+  "name": "dsh-lightroom-py",
+  "version": "0.1.0",
+  "description": "Adobe Lightroom Classic for DeepSeek Harness (dsh) \u2014 mounts the lightroom-py MCP server as native dsh tools. Pure-config bundle inside the lightroom-py repo; the Python package comes from PyPI (pip install lightroom-py).",
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "lightroom",
+    "lightroom-classic",
+    "mcp",
+    "photography"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "files": [
+    "cordis.patch.yml",
+    "dsh/",
+    "SKILL.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/drshy-org/lightroom-py.git"
+  },
+  "homepage": "https://github.com/drshy-org/lightroom-py#deepseek-harness"
+}

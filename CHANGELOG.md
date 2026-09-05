@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### DeepSeek Harness (dsh) plugin bundle (2026-09)
+
+The repository root now doubles as a dsh bundle (`package.json` with
+`dsh.bundle` + `cordis.patch.yml`): `dsh plugin add github:drshy-org/lightroom-py`
+mounts the `lightroom-mcp` server so all 15 tools appear as
+`mcp__lightroom_py__*` native dsh tools. Pure configuration — no build
+step, no `allowBuilds` prompt. The agent skill ships in dsh's
+one-level layout at `dsh/skills/lightroom/SKILL.md`; `dsh/README.md`
+covers install and skill discovery. Verified locally with
+`dsh plugin add` + a run listing every tool and reading a real catalog.
+
 ## [0.6.0] — 2026-05-10
 
 # 🎯 The geometry mask breakthrough.

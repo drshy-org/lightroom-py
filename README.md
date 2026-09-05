@@ -193,6 +193,17 @@ The package ships a canonical [SKILL.md](SKILL.md) installable via `lightroom sk
 
 For Claude Desktop's MCP integration: `pip install "lightroom-py[mcp]"` + point Claude Desktop's config at the bundled `lightroom-mcp` binary. See [docs/mcp.md](docs/mcp.md).
 
+### 4. DeepSeek Harness (dsh)
+
+This repository is also a [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) plugin bundle (`package.json` + `cordis.patch.yml` at the root — pure configuration, no build step):
+
+```bash
+pip install "lightroom-py[mcp]"                        # the MCP server
+dsh plugin add github:drshy-org/lightroom-py           # the bundle; tools appear as mcp__lightroom_py__*
+```
+
+All 15 MCP tools become native dsh tools; the agent skill is shipped as `dsh/skills/lightroom/SKILL.md`. Details and the skill-discovery note: [dsh/README.md](dsh/README.md). Any other MCP client (Codex CLI, Cursor, Gemini CLI, OpenCode) works the same way — point it at the `lightroom-mcp` binary.
+
 ---
 
 ## Why this exists

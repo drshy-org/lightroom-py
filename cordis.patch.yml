@@ -1,0 +1,20 @@
+# dsh-lightroom-py — Adobe Lightroom Classic tools for DeepSeek Harness.
+#
+# Prerequisites (Python side, once):
+#   pip install lightroom-py          # provides the `lightroom-mcp` stdio server
+#   lightroom bridge install          # installs the Lightroom plugin
+#   lightroom bridge start            # bridge daemon (:8765); in Lightroom:
+#                                     # Library → Plug-in Extras → "lightroom-py: Start bridge"
+#
+# Tools appear as mcp__lightroom_py__<tool> (15 tools: catalog_info, photos_list,
+# develop_apply_settings, develop_apply_preset, library_export, metadata_*, ...).
+# Override the executable with LIGHTROOM_MCP when it is not on PATH.
+- insert:
+    - id: mcp-lightroom-py
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: lightroom_py
+        transport: stdio
+        command: !!js process.env.LIGHTROOM_MCP ?? 'lightroom-mcp'
+        cwd: !!js process.cwd()
+        toolCallTimeoutMs: 120000
