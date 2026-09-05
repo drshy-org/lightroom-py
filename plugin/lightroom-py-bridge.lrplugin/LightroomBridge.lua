@@ -37,4 +37,47 @@ if ok and BridgeState then
   _G.LightroomPyBridge.token_auto_synced = synced
 end
 
+-- Auto-start the poll loop when Lightroom loads this plugin (opt-out:
+-- prefs.auto_start = false). Reality check (LR Classic 15.5.1,
+-- 2026-09-05, see lightroom-py-bridge.log): Lightroom defers plugin
+-- initialisation until the plugin is first used — the init script
+-- runs at the first Plug-in Extras click, not at app launch. So this
+-- block cannot remove the per-launch "Start bridge" click on current
+-- LR builds; it makes that click idempotent and self-diagnosing, and
+-- will start at launch on any LR build that initialises plugins
+-- eagerly. Silent by design; the Python side retries, so starting
+-- before the daemon is up is safe.
+if prefs.auto_start == nil then prefs.auto_start = true end
+-- A bridge configured without a token (bridge.json present, token "") is
+-- valid — the menu Start path connects fine that way — so gate on "a
+-- bridge.json was synced OR a token exists", not on a non-empty token.
+local bridge_known = _G.LightroomPyBridge.token_auto_synced
+  or (prefs.bridge_token ~= nil and prefs.bridge_token ~= "")
+-- Outcome goes to ~/Documents/LrClassicLogs/lightroom-py-bridge.log so an
+-- auto-start failure is diagnosable without opening the Status menu.
+local LrLogger = import "LrLogger"
+local log = LrLogger("lightroom-py-bridge")
+log:enable("logfile")
+log:infof("init: auto_start=%s synced=%s token_present=%s host=%s port=%s",
+  tostring(prefs.auto_start), tostring(_G.LightroomPyBridge.token_auto_synced),
+  tostring(prefs.bridge_token ~= nil and prefs.bridge_token ~= ""),
+  tostring(prefs.bridge_host), tostring(prefs.bridge_port))
+if prefs.auto_start and bridge_known then
+  local run_ok, Runner = pcall(require, "BridgeRunner")
+  if run_ok and Runner then
+    local started, err = pcall(Runner.start)
+    _G.LightroomPyBridge.auto_started = started and true or false
+    if started then
+      log:info("auto-start: Runner.start returned ok")
+    else
+      _G.LightroomPyBridge.last_error = "auto-start failed: " .. tostring(err)
+      log:errorf("auto-start failed: %s", tostring(err))
+    end
+  else
+    log:errorf("auto-start: require BridgeRunner failed: %s", tostring(Runner))
+  end
+else
+  log:info("auto-start skipped (auto_start off or no bridge.json/token)")
+end
+
 return {}
